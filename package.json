@@ -1,0 +1,48 @@
+{
+  "name": "artifact-colab",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server/index.ts",
+    "build:annotator": "esbuild src/annotator/main.ts --bundle --format=iife --global-name=ArtifactAnnotator --target=es2020 --minify --outfile=dist/annotator.js",
+    "build:client": "esbuild src/client/viewer.ts --bundle --format=iife --target=es2020 --minify --outfile=dist/viewer.js",
+    "build:server": "tsc -p tsconfig.build.json",
+    "build": "npm run build:annotator && npm run build:client && npm run build:server",
+    "check": "tsc --noEmit && vitest run",
+    "test": "vitest",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.0",
+    "@modelcontextprotocol/hono": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "better-sqlite3": "^13.0.3",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.13.1",
+    "linkedom": "^0.18.13",
+    "marked": "^18.0.9",
+    "resend": "^6.18.1",
+    "zod": "^4.4.3"
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "^0.25.0"
+    }
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.1.2",
+    "drizzle-kit": "^0.31.10",
+    "esbuild": "^0.28.1",
+    "happy-dom": "^20.11.1",
+    "jsdom": "^29.1.1",
+    "tsx": "^4.23.10",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

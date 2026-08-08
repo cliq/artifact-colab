@@ -1,0 +1,11 @@
+node_modules
+dist
+data
+.git
+.env
+test
+e2e
+planning
+docs
+test-results
+playwright-report

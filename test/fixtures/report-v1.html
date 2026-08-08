@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Platform Migration Report</title>
+<style>
+  body {
+    font-family: Georgia, "Times New Roman", serif;
+    max-width: 760px;
+    margin: 40px auto;
+    padding: 0 20px;
+    line-height: 1.6;
+    color: #222;
+  }
+  h1 { font-size: 30px; margin-bottom: 4px; }
+  h2 { font-size: 20px; margin-top: 36px; border-bottom: 1px solid #ddd; padding-bottom: 6px; }
+  blockquote {
+    margin: 20px 0;
+    padding: 12px 20px;
+    border-left: 4px solid #999;
+    color: #555;
+    font-style: italic;
+  }
+  ul, ol { padding-left: 24px; }
+  code { background: #f2f2f2; padding: 1px 4px; border-radius: 3px; }
+</style>
+</head>
+<body>
+  <h1>Platform Migration Report</h1>
+  <p>Prepared for the engineering leadership review, this report&nbsp;summarizes the outcome of the Q3 infrastructure migration and what it means for upcoming releases.</p>
+
+  <h2>Background</h2>
+  <p>
+    The legacy system had accumulated years of <strong>technical</strong> debt, and on-call load had grown
+    <em>steadily</em> uncomfortable. The migration was scoped to reduce incident volume &amp; simplify deploys.
+  </p>
+
+  <h2>Outcomes</h2>
+  <p>
+    The team’s velocity improved after the migration. Deploy frequency roughly doubled, and the median
+    time to recover from an incident dropped from forty minutes to under nine.
+  </p>
+  <p>
+    Every workstream was validated against its own <strong>acceptance criteria</strong> before rollout, and no
+    workstream shipped without sign-off from at least two reviewers.
+  </p>
+
+  <blockquote>
+    “We haven’t had a Sev-1 in six weeks — that hasn’t happened since before the rewrite.” — on-call lead
+  </blockquote>
+
+  <h2>Risks & Follow-ups</h2>
+  <p>
+    A few items remain open. The billing service still depends on the old queue, and its own
+    acceptance criteria have not yet been finalized with the finance team.
+  </p>
+  <ul>
+    <li>Finish decommissioning the legacy queue consumers</li>
+    <li>Backfill integration tests for the billing edge cases</li>
+    <li>Document the new on-call runbook</li>
+  </ul>
+
+  <h2>Next Steps</h2>
+  <p>The following sequence is proposed for the next two sprints:</p>
+  <ol>
+    <li>Freeze the legacy write path</li>
+    <li>Migrate remaining billing consumers</li>
+    <li>Retire the old cluster</li>
+  </ol>
+</body>
+</html>

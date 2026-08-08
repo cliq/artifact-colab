@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Quarterly Metrics Dashboard</title>
+<style>
+  :root {
+    --bg: #f7f7f8;
+    --card-bg: #ffffff;
+    --text: #1f2328;
+    --muted: #6b7280;
+    --accent: #6366f1;
+    --border: #e5e7eb;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header h1 {
+    font-size: 24px;
+    margin-bottom: 4px;
+  }
+  header p {
+    color: var(--muted);
+    margin-top: 0;
+  }
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin: 24px 0;
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+  .card .value {
+    font-size: 28px;
+    font-weight: 700;
+  }
+  .card .label {
+    color: var(--muted);
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+  }
+  th {
+    background: #fafafa;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .summary {
+    max-width: 720px;
+    line-height: 1.5;
+  }
+  footer {
+    margin-top: 24px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Quarterly Metrics Dashboard</h1>
+    <p>Snapshot of core business metrics across the last eight quarters.</p>
+  </header>
+
+  <section class="stat-grid">
+    <div class="card">
+      <div class="value">$4.2M</div>
+      <div class="label">Total Revenue</div>
+    </div>
+    <div class="card">
+      <div class="value">1,284</div>
+      <div class="label">Active Accounts</div>
+    </div>
+    <div class="card">
+      <div class="value">2.1%</div>
+      <div class="label">Monthly Churn</div>
+    </div>
+    <div class="card">
+      <div class="value">96%</div>
+      <div class="label">Uptime SLA</div>
+    </div>
+  </section>
+
+  <p class="summary">
+    Enterprise revenue grew 14% year over year, driven by seat expansion.
+    Growth was broad-based across regions, with the largest gains coming from renewed multi-year contracts.
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Quarter</th>
+        <th>Revenue</th>
+        <th>Churn</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>Q1 2024</td><td>$0.42M</td><td>Churn declined to 2.1%</td><td>On track</td></tr>
+      <tr><td>Q2 2024</td><td>$0.48M</td><td>2.3%</td><td>At risk</td></tr>
+      <tr><td>Q3 2024</td><td>$0.51M</td><td>2.0%</td><td>On track</td></tr>
+      <tr><td>Q4 2024</td><td>$0.55M</td><td>1.9%</td><td>On track</td></tr>
+      <tr><td>Q1 2025</td><td>$0.58M</td><td>2.4%</td><td>At risk</td></tr>
+      <tr><td>Q2 2025</td><td>$0.61M</td><td>2.1%</td><td>On track</td></tr>
+      <tr><td>Q3 2025</td><td>$0.66M</td><td>1.8%</td><td>On track</td></tr>
+      <tr><td>Q4 2025</td><td>$0.71M</td><td>1.7%</td><td>At risk</td></tr>
+    </tbody>
+  </table>
+
+  <footer>
+    Generated <span id="generated-at">--</span>
+  </footer>
+
+  <script>
+    document.getElementById('generated-at').textContent = new Date().toDateString();
+  </script>
+</body>
+</html>

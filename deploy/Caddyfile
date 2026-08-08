@@ -1,0 +1,7 @@
+# Reverse proxy for Artifact Colab. Caddy obtains and renews Let's Encrypt
+# certificates automatically once DNS for $DOMAIN points at the host, and
+# retries with backoff until then. DOMAIN is set in .env and passed in via
+# deploy/docker-compose.prod.yml.
+{$DOMAIN} {
+	reverse_proxy artifact-colab:3000
+}

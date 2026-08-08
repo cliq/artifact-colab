@@ -1,0 +1,26 @@
+# Production overlay: puts the app behind Caddy (TLS termination) and stops
+# publishing the app port on the host. Activate it by adding to .env:
+#   COMPOSE_FILE=docker-compose.yml:deploy/docker-compose.prod.yml
+#   DOMAIN=artifacts.example.com
+services:
+  artifact-colab:
+    ports: !reset []
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  caddy-data:
+  caddy-config:

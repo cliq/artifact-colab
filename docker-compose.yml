@@ -1,0 +1,16 @@
+services:
+  artifact-colab:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      EMAIL_FROM: ${EMAIL_FROM}
+      INSTANCE_ADMIN_EMAILS: ${INSTANCE_ADMIN_EMAILS}
+      BASE_URL: ${BASE_URL}
+      SELF_SIGNUP: ${SELF_SIGNUP}
+    volumes:
+      - artifact-colab-data:/data
+
+volumes:
+  artifact-colab-data:

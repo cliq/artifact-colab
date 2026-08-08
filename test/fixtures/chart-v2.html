@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Weekly Active Users</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    max-width: 680px;
+    margin: 40px auto;
+    padding: 0 20px;
+    color: #1a1a1a;
+  }
+  h1 { font-size: 22px; }
+  p.intro { color: #444; line-height: 1.6; }
+  figure {
+    margin: 24px 0;
+    background: #fafafa;
+    border: 1px solid #e5e5e5;
+    border-radius: 10px;
+    padding: 16px;
+  }
+  canvas {
+    width: 100%;
+    max-height: 320px;
+  }
+  p.caption {
+    text-align: center;
+    color: #666;
+    font-size: 13px;
+    margin: 8px 0 0;
+  }
+  p.conclusion {
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+  <h1>Weekly Active Users</h1>
+  <p class="intro">
+    This chart extends the weekly active user trend through the third quarter, pulled from the same
+    analytics warehouse view used in the last update. Growth held through the summer months, with a
+    brief dip in August around the planned maintenance window.
+  </p>
+
+  <figure>
+    <canvas id="wauChart" width="640" height="280"></canvas>
+    <p class="caption">Figure 1: Weekly active users, Jan–Sep.</p>
+  </figure>
+
+  <p class="conclusion">
+    Overall, the trend line supports continuing investment in onboarding rather than paid acquisition
+    for the next two quarters, since organic activation is outpacing spend efficiency.
+  </p>
+
+  <p class="conclusion">
+    The August dip appears fully explained by the maintenance window and has already reversed in
+    early September, so no change to the current roadmap is recommended.
+  </p>
+
+  <script>
+    try {
+      const ctx = document.getElementById('wauChart').getContext('2d');
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep'],
+          datasets: [{
+            label: 'Weekly Active Users',
+            data: [12400, 13100, 15800, 17250, 18900, 21200, 22100, 21400, 23800],
+            borderColor: '#6366f1',
+            backgroundColor: 'rgba(99, 102, 241, 0.15)',
+            fill: true,
+            tension: 0.3
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } }
+        }
+      });
+    } catch (err) {
+      console.warn('Chart.js unavailable in this environment:', err);
+    }
+  </script>
+</body>
+</html>
