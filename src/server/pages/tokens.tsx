@@ -175,6 +175,9 @@ export const TokensPage: FC<TokensPageProps> = ({ user, csrfToken, tokens, teams
                 Copy
               </button>
             </div>
+            {!baseUrl.startsWith('https://') && (
+              <p class="muted small">To connect from claude.ai instead, the server must be reachable over public HTTPS.</p>
+            )}
           </div>
           <div data-agent-panel="codex" hidden>
             <p class="muted">
@@ -220,8 +223,7 @@ export const TokensPage: FC<TokensPageProps> = ({ user, csrfToken, tokens, teams
             </div>
           </div>
           <p class="muted small">
-            For claude.ai, the server must be reachable over public HTTPS. See the{' '}
-            <a href="https://github.com/cliq/artifact-colab#readme">README</a> for the tools the agent gets.
+            See the <a href="https://github.com/cliq/artifact-colab#readme">README</a> for the tools the agent gets.
           </p>
         </div>
       )}
