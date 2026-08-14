@@ -55,6 +55,11 @@ main { flex: 1 1 auto; min-height: 0; max-width: none; width: 100%; margin: 0; p
 .comment-nav button:disabled { opacity: 0.35; cursor: default; }
 .sidebar-inner { overflow-y: auto; flex: 1; padding: 12px 16px; }
 #no-highlights-banner { padding: 8px 12px; background: #fef3c7; font-size: 12px; border-bottom: 1px solid #fde68a; }
+.sidebar.collapsed { width: 40px; }
+.sidebar.collapsed .sidebar-header, .sidebar.collapsed #no-highlights-banner, .sidebar.collapsed .sidebar-inner { display: none; }
+.sidebar-expand { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 12px 0; width: 100%; background: transparent; border: none; cursor: pointer; color: var(--color-muted); transition: background 150ms ease-out, color 150ms ease-out; }
+.sidebar-expand:hover { background: var(--color-bg); color: var(--color-accent); }
+.sidebar-expand .rail-label { writing-mode: vertical-rl; font-size: 12px; font-weight: 650; letter-spacing: 0.05em; text-transform: uppercase; }
 [hidden] { display: none !important; }
 @media (max-width: 900px) { .sidebar { width: 300px; } }
 `;
@@ -133,7 +138,13 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
             ></iframe>
           </div>
         </div>
-        <aside class="sidebar">
+        <aside class="sidebar" id="comments-sidebar">
+          <button type="button" id="expand-sidebar" class="sidebar-expand" title="Show comments" aria-label="Show comments" hidden>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M10 3L5.5 8L10 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span class="rail-label" id="comments-rail-label">Comments</span>
+          </button>
           <div class="sidebar-header">
             <span id="comments-title">Comments</span>
             <div class="comment-nav">
@@ -145,6 +156,12 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
               <button type="button" id="next-comment" aria-label="Next comment" disabled>
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                   <path d="M6 3L10.5 8L6 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </button>
+              <button type="button" id="collapse-sidebar" title="Hide comments" aria-label="Hide comments">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M6 3L10.5 8L6 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                  <path d="M11 3v10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
                 </svg>
               </button>
             </div>

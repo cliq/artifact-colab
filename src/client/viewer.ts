@@ -173,6 +173,7 @@ function init(): void {
   const versionPicker = document.getElementById('version-picker') as HTMLSelectElement | null;
   const noHighlightsBanner = document.getElementById('no-highlights-banner');
   const commentsTitle = document.getElementById('comments-title');
+  const railLabel = document.getElementById('comments-rail-label');
   const prevButton = document.getElementById('prev-comment') as HTMLButtonElement | null;
   const nextButton = document.getElementById('next-comment') as HTMLButtonElement | null;
   if (!dataEl?.textContent || !iframe || !sidebar) return;
@@ -499,7 +500,9 @@ function init(): void {
     threadsEl.appendChild(details);
 
     const openCount = open.length + orphaned.length;
-    if (commentsTitle) commentsTitle.textContent = openCount > 0 ? `Comments (${openCount})` : 'Comments';
+    const title = openCount > 0 ? `Comments (${openCount})` : 'Comments';
+    if (commentsTitle) commentsTitle.textContent = title;
+    if (railLabel) railLabel.textContent = title;
     if (prevButton) prevButton.disabled = openCount === 0;
     if (nextButton) nextButton.disabled = openCount === 0;
 
@@ -606,6 +609,38 @@ function init(): void {
     applyFrameScale();
     alignCards();
   });
+
+  // --- collapsible sidebar ------------------------------------------------
+  // The collapsed choice is a device preference (like the agent picker on the
+  // settings page), so it lives in localStorage, not per document.
+  const sidebarAside = document.getElementById('comments-sidebar');
+  const collapseButton = document.getElementById('collapse-sidebar');
+  const expandButton = document.getElementById('expand-sidebar');
+  const SIDEBAR_COLLAPSED_KEY = 'artifact-colab:comments-collapsed';
+
+  function setSidebarCollapsed(collapsed: boolean, persist: boolean): void {
+    if (!sidebarAside || !expandButton) return;
+    sidebarAside.classList.toggle('collapsed', collapsed);
+    expandButton.hidden = !collapsed;
+    if (persist) {
+      try {
+        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0');
+      } catch {
+        // Private browsing: the toggle still works, it just isn't remembered.
+      }
+    }
+    // The frame just gained or lost the sidebar's width.
+    applyFrameScale();
+    alignCards();
+  }
+
+  collapseButton?.addEventListener('click', () => setSidebarCollapsed(true, true));
+  expandButton?.addEventListener('click', () => setSidebarCollapsed(false, true));
+  try {
+    if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1') setSidebarCollapsed(true, false);
+  } catch {
+    // Ignore: default to expanded.
+  }
 
   // --- bridge -----------------------------------------------------------
   const bridge = new AnnotatorBridge(iframe, {
