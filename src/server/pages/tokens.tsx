@@ -27,8 +27,9 @@ export interface TokensPageProps {
   error?: string;
 }
 
-// Wires up the [data-copy] buttons; no other JS on this page.
-const copyScript = `
+// Wires up the [data-copy] buttons and the agent picker (which remembers the
+// last choice in localStorage); no other JS on this page.
+const pageScript = `
 document.addEventListener('click', function (e) {
   var btn = e.target.closest('[data-copy]');
   if (!btn) return;
@@ -40,6 +41,34 @@ document.addEventListener('click', function (e) {
     setTimeout(function () { btn.textContent = original; }, 1500);
   });
 });
+
+(function () {
+  var STORAGE_KEY = 'artifact-colab:preferred-agent';
+  var picker = document.getElementById('agent-picker');
+  if (!picker) return;
+
+  function showAgent(id) {
+    document.querySelectorAll('[data-agent-panel]').forEach(function (panel) {
+      panel.hidden = panel.getAttribute('data-agent-panel') !== id;
+    });
+  }
+
+  picker.addEventListener('change', function (e) {
+    if (e.target.name !== 'agent') return;
+    showAgent(e.target.value);
+    try { localStorage.setItem(STORAGE_KEY, e.target.value); } catch (err) {}
+  });
+
+  var saved = null;
+  try { saved = localStorage.getItem(STORAGE_KEY); } catch (err) {}
+  if (saved) {
+    var radio = picker.querySelector('input[name="agent"][value="' + saved + '"]');
+    if (radio) {
+      radio.checked = true;
+      showAgent(saved);
+    }
+  }
+})();
 `;
 
 export const TokensPage: FC<TokensPageProps> = ({ user, csrfToken, tokens, teams, isInstanceAdmin, baseUrl, justCreated, error }) => {
@@ -116,55 +145,79 @@ export const TokensPage: FC<TokensPageProps> = ({ user, csrfToken, tokens, teams
               Copy
             </button>
           </div>
-          <h3>Connect Claude Code</h3>
-          <p class="muted">Run this once in a terminal to add Artifact Colab as an MCP server:</p>
-          <div class="copy-row">
-            <pre class="snippet" id="mcp-snippet">
-              {snippet}
-            </pre>
-            <button type="button" class="secondary copy-btn" data-copy="mcp-snippet">
-              Copy
-            </button>
+          <h3>Connect your agent</h3>
+          <fieldset class="segmented" id="agent-picker">
+            <legend class="visually-hidden">Choose your coding agent</legend>
+            <label>
+              <input type="radio" name="agent" value="claude-code" checked />
+              <span>Claude Code</span>
+            </label>
+            <label>
+              <input type="radio" name="agent" value="codex" />
+              <span>Codex</span>
+            </label>
+            <label>
+              <input type="radio" name="agent" value="opencode" />
+              <span>OpenCode</span>
+            </label>
+            <label>
+              <input type="radio" name="agent" value="openclaw" />
+              <span>OpenClaw</span>
+            </label>
+          </fieldset>
+          <div data-agent-panel="claude-code">
+            <p class="muted">Run this once in a terminal to add Artifact Colab as an MCP server:</p>
+            <div class="copy-row">
+              <pre class="snippet" id="mcp-snippet">
+                {snippet}
+              </pre>
+              <button type="button" class="secondary copy-btn" data-copy="mcp-snippet">
+                Copy
+              </button>
+            </div>
           </div>
-          <h3>Connect Codex</h3>
-          <p class="muted">
-            Add this to <code>~/.codex/config.toml</code> (or use{' '}
-            <code>codex mcp add artifact-colab --url {baseUrl}/mcp --bearer-token-env-var YOUR_ENV_VAR</code> if you
-            prefer keeping the token in an environment variable):
-          </p>
-          <div class="copy-row">
-            <pre class="snippet" id="codex-snippet">
-              {codexSnippet}
-            </pre>
-            <button type="button" class="secondary copy-btn" data-copy="codex-snippet">
-              Copy
-            </button>
+          <div data-agent-panel="codex" hidden>
+            <p class="muted">
+              Add this to <code>~/.codex/config.toml</code> (or use{' '}
+              <code>codex mcp add artifact-colab --url {baseUrl}/mcp --bearer-token-env-var YOUR_ENV_VAR</code> if you
+              prefer keeping the token in an environment variable):
+            </p>
+            <div class="copy-row">
+              <pre class="snippet" id="codex-snippet">
+                {codexSnippet}
+              </pre>
+              <button type="button" class="secondary copy-btn" data-copy="codex-snippet">
+                Copy
+              </button>
+            </div>
           </div>
-          <h3>Connect OpenCode</h3>
-          <p class="muted">
-            Merge this into <code>~/.config/opencode/opencode.json</code> (or a project-local{' '}
-            <code>opencode.json</code>):
-          </p>
-          <div class="copy-row">
-            <pre class="snippet" id="opencode-snippet">
-              {opencodeSnippet}
-            </pre>
-            <button type="button" class="secondary copy-btn" data-copy="opencode-snippet">
-              Copy
-            </button>
+          <div data-agent-panel="opencode" hidden>
+            <p class="muted">
+              Merge this into <code>~/.config/opencode/opencode.json</code> (or a project-local{' '}
+              <code>opencode.json</code>):
+            </p>
+            <div class="copy-row">
+              <pre class="snippet" id="opencode-snippet">
+                {opencodeSnippet}
+              </pre>
+              <button type="button" class="secondary copy-btn" data-copy="opencode-snippet">
+                Copy
+              </button>
+            </div>
           </div>
-          <h3>Connect OpenClaw</h3>
-          <p class="muted">
-            Merge this into <code>~/.openclaw/openclaw.json</code>, then verify with{' '}
-            <code>openclaw mcp doctor artifact-colab --probe</code>:
-          </p>
-          <div class="copy-row">
-            <pre class="snippet" id="openclaw-snippet">
-              {openclawSnippet}
-            </pre>
-            <button type="button" class="secondary copy-btn" data-copy="openclaw-snippet">
-              Copy
-            </button>
+          <div data-agent-panel="openclaw" hidden>
+            <p class="muted">
+              Merge this into <code>~/.openclaw/openclaw.json</code>, then verify with{' '}
+              <code>openclaw mcp doctor artifact-colab --probe</code>:
+            </p>
+            <div class="copy-row">
+              <pre class="snippet" id="openclaw-snippet">
+                {openclawSnippet}
+              </pre>
+              <button type="button" class="secondary copy-btn" data-copy="openclaw-snippet">
+                Copy
+              </button>
+            </div>
           </div>
           <p class="muted small">
             For claude.ai, the server must be reachable over public HTTPS. See the{' '}
@@ -247,14 +300,13 @@ export const TokensPage: FC<TokensPageProps> = ({ user, csrfToken, tokens, teams
         <section class="settings-section">
           <h2>Connect Claude Code, Codex, OpenCode, or OpenClaw</h2>
           <p class="muted">
-            Create a token above — you'll get a ready-to-paste <code>claude mcp add</code> command plus{' '}
-            <code>~/.codex/config.toml</code>, <code>opencode.json</code>, and <code>openclaw.json</code> snippets with
+            Create a token above, then pick your agent — you'll get a ready-to-paste command or config snippet with
             the token filled in.
           </p>
         </section>
       )}
 
-      <script dangerouslySetInnerHTML={{ __html: copyScript }}></script>
+      <script dangerouslySetInnerHTML={{ __html: pageScript }}></script>
     </Layout>
   );
 };

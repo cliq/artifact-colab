@@ -552,6 +552,64 @@ button.secondary.danger:hover {
   align-self: center;
 }
 
+/* Agent picker on the token settings page: radios styled as a segmented pill. */
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-paper-2);
+  padding: 3px;
+  margin: 0.25rem 0 0.75rem;
+}
+
+.segmented label {
+  cursor: pointer;
+}
+
+.segmented input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.segmented span {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.4rem 0.9rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.9rem;
+  color: var(--color-ink-2);
+  transition: background var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
+}
+
+.segmented label:hover span {
+  color: var(--color-ink);
+}
+
+.segmented input:checked + span {
+  background: var(--color-ink);
+  color: var(--color-paper);
+}
+
+.segmented input:focus-visible + span {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .snippet {
   font-family: var(--font-mono);
   font-size: 0.85rem;
