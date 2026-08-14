@@ -71,12 +71,30 @@ export const TokensPage: FC<TokensPageProps> = ({ user, csrfToken, tokens, teams
       )
     : null;
 
+  const openclawSnippet = justCreated
+    ? JSON.stringify(
+        {
+          mcp: {
+            servers: {
+              'artifact-colab': {
+                url: `${baseUrl}/mcp`,
+                transport: 'streamable-http',
+                headers: { Authorization: `Bearer ${justCreated.plaintext}` },
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )
+    : null;
+
   return (
     <Layout title="Connect agents - Artifact Colab" user={user} csrfToken={csrfToken} isInstanceAdmin={isInstanceAdmin}>
       <h1>Connect agents</h1>
       <p class="muted page-intro">
-        Personal access tokens let coding agents (Claude Code, Codex, OpenCode, or any MCP client) publish artifacts
-        and read comments as you.
+        Personal access tokens let coding agents (Claude Code, Codex, OpenCode, OpenClaw, or any MCP client) publish
+        artifacts and read comments as you.
       </p>
 
       <div class="callout">
@@ -132,6 +150,19 @@ export const TokensPage: FC<TokensPageProps> = ({ user, csrfToken, tokens, teams
               {opencodeSnippet}
             </pre>
             <button type="button" class="secondary copy-btn" data-copy="opencode-snippet">
+              Copy
+            </button>
+          </div>
+          <h3>Connect OpenClaw</h3>
+          <p class="muted">
+            Merge this into <code>~/.openclaw/openclaw.json</code>, then verify with{' '}
+            <code>openclaw mcp doctor artifact-colab --probe</code>:
+          </p>
+          <div class="copy-row">
+            <pre class="snippet" id="openclaw-snippet">
+              {openclawSnippet}
+            </pre>
+            <button type="button" class="secondary copy-btn" data-copy="openclaw-snippet">
               Copy
             </button>
           </div>
@@ -214,10 +245,11 @@ export const TokensPage: FC<TokensPageProps> = ({ user, csrfToken, tokens, teams
 
       {!justCreated && (
         <section class="settings-section">
-          <h2>Connect Claude Code, Codex, or OpenCode</h2>
+          <h2>Connect Claude Code, Codex, OpenCode, or OpenClaw</h2>
           <p class="muted">
             Create a token above — you'll get a ready-to-paste <code>claude mcp add</code> command plus{' '}
-            <code>~/.codex/config.toml</code> and <code>opencode.json</code> snippets with the token filled in.
+            <code>~/.codex/config.toml</code>, <code>opencode.json</code>, and <code>openclaw.json</code> snippets with
+            the token filled in.
           </p>
         </section>
       )}
