@@ -224,6 +224,25 @@ export function createSelfServeTeam(db: DB, name: string, creator: User, claimDo
   }
 }
 
+/**
+ * Solo-user path: minting a token must not require joining a team first, so a
+ * teamless user gets a personal workspace created on the fly (they're its
+ * admin and can invite people later). Returns the user's first team when they
+ * already have one — callers only reach for this when no team was picked.
+ */
+export function ensurePersonalTeam(db: DB, user: User, now: Date): Team {
+  const memberships = getUserTeams(db, user.id);
+  if (memberships.length > 0) return memberships[0]!.team;
+
+  const base = (user.name ?? user.email.split('@')[0] ?? 'Personal').trim();
+  const result = createSelfServeTeam(db, `${base}'s workspace`, user, false, now);
+  if (result.ok) return result.team;
+
+  // Lost a race with a concurrent membership (invite redemption, another
+  // token create): the membership that beat us is the team to use.
+  return getUserTeams(db, user.id)[0]!.team;
+}
+
 export function renameTeam(db: DB, teamId: string, name: string): void {
   db.update(teams).set({ name }).where(eq(teams.id, teamId)).run();
 }

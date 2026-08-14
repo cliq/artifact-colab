@@ -21,6 +21,7 @@ import type { AppEnv } from '../../src/server/context.js';
 import { documents, openDb, tokens, versions, type DB } from '../../src/server/db/index.js';
 import { csrfProtect } from '../../src/server/middleware.js';
 import { pageRoutes } from '../../src/server/routes/pages.js';
+import { getUserTeams } from '../../src/server/services/teams.js';
 import { baseTestConfig, seedTeamWithDomain } from './teamTestUtils.js';
 
 describe('pages', () => {
@@ -157,6 +158,31 @@ describe('pages', () => {
 
     const remaining = db.select().from(tokens).where(eq(tokens.id, created!.id)).all();
     expect(remaining).toHaveLength(0);
+  });
+
+  test('token settings: a teamless user gets a personal workspace created with their first token', async () => {
+    const { userId, sessionCookie } = await signedInSession('solo@lonely.dev');
+    const csrf = await getCsrfCookie();
+
+    const createRes = await app.request('/settings/tokens', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        cookie: `session=${sessionCookie}; csrf=${csrf}`,
+      },
+      body: new URLSearchParams({ label: 'solo token', _csrf: csrf }).toString(),
+    });
+    expect(createRes.status).toBe(200);
+    const html = await createRes.text();
+    expect(html).toMatch(/acp_[0-9a-f]{64}/);
+
+    const memberships = getUserTeams(db, userId);
+    expect(memberships).toHaveLength(1);
+    expect(memberships[0]!.team.name).toBe("solo's workspace");
+    expect(memberships[0]!.role).toBe('admin');
+
+    const created = db.select().from(tokens).all().find((t) => t.label === 'solo token');
+    expect(created?.teamId).toBe(memberships[0]!.team.id);
   });
 
   test('GET /static/app.css serves CSS', async () => {

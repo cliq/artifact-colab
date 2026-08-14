@@ -23,6 +23,7 @@ import {
   claimableDomain,
   createSelfServeTeam,
   domainOf,
+  ensurePersonalTeam,
   getUserTeams,
   isInstanceAdmin,
 } from '../services/teams.js';
@@ -198,9 +199,17 @@ pageRoutes.post('/settings/tokens', sessionAuth({ redirect: true }), async (c) =
   const body = await c.req.parseBody();
   const label = typeof body['label'] === 'string' && body['label'].trim().length > 0 ? body['label'].trim() : 'MCP token';
 
-  const teams = tokenTeamOptions(db, user.id);
+  let teams = tokenTeamOptions(db, user.id);
   const requestedTeamId = typeof body['team_id'] === 'string' ? body['team_id'] : undefined;
-  const team = requestedTeamId !== undefined ? teams.find((t) => t.id === requestedTeamId) : teams.length === 1 ? teams[0] : undefined;
+  let team = requestedTeamId !== undefined ? teams.find((t) => t.id === requestedTeamId) : teams.length === 1 ? teams[0] : undefined;
+
+  // Solo users aren't blocked on joining a team: their first token creates a
+  // personal workspace to publish into.
+  if (!team && teams.length === 0) {
+    const personal = ensurePersonalTeam(db, user, new Date());
+    teams = tokenTeamOptions(db, user.id);
+    team = { id: personal.id, name: personal.name };
+  }
 
   const render = (justCreated?: { plaintext: string }, error?: string) => {
     const userTokens = db.select().from(tokens).where(eq(tokens.userId, user.id)).orderBy(desc(tokens.createdAt)).all();
@@ -219,7 +228,7 @@ pageRoutes.post('/settings/tokens', sessionAuth({ redirect: true }), async (c) =
   };
 
   if (!team) {
-    return render(undefined, teams.length === 0 ? 'Join a team before creating a token.' : 'Pick a team for this token.');
+    return render(undefined, 'Pick a team for this token.');
   }
 
   const { plaintext } = createToken(db, user.id, team.id, label, new Date());

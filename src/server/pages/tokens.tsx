@@ -268,32 +268,33 @@ export const TokensPage: FC<TokensPageProps> = ({ user, csrfToken, tokens, teams
       <section class="settings-section">
         <h2>Create a token</h2>
         {error && <p class="error-message">{error}</p>}
-        {teams.length === 0 ? (
-          <p class="muted">You're not a member of any team yet — tokens publish into a team, so join one first.</p>
-        ) : (
-          <form method="post" action="/settings/tokens" class="card form-card">
-            <input type="hidden" name="_csrf" value={csrfToken} />
-            <div class="form-row">
-              <div class="field field-grow">
-                <label for="label-input">Label</label>
-                <input type="text" id="label-input" name="label" value="MCP token" required />
-              </div>
-              {teams.length === 1 ? (
-                <input type="hidden" name="team_id" value={teams[0]!.id} />
-              ) : (
-                <div class="field">
-                  <label for="team-input">Team</label>
-                  <select id="team-input" name="team_id">
-                    {teams.map((team) => (
-                      <option value={team.id}>{team.name}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              <button type="submit">Create token</button>
-            </div>
-          </form>
+        {teams.length === 0 && (
+          <p class="muted">
+            You're not on a team yet — your first token will create a personal workspace to publish into. You can
+            invite teammates to it later.
+          </p>
         )}
+        <form method="post" action="/settings/tokens" class="card form-card">
+          <input type="hidden" name="_csrf" value={csrfToken} />
+          <div class="form-row">
+            <div class="field field-grow">
+              <label for="label-input">Label</label>
+              <input type="text" id="label-input" name="label" value="MCP token" required />
+            </div>
+            {teams.length === 1 && <input type="hidden" name="team_id" value={teams[0]!.id} />}
+            {teams.length > 1 && (
+              <div class="field">
+                <label for="team-input">Team</label>
+                <select id="team-input" name="team_id">
+                  {teams.map((team) => (
+                    <option value={team.id}>{team.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <button type="submit">Create token</button>
+          </div>
+        </form>
       </section>
 
       {!justCreated && (

@@ -9,7 +9,7 @@ import { z } from 'zod';
 
 import { createToken, revokeToken } from '../auth.js';
 import type { AppEnv } from '../context.js';
-import { getUserTeams } from '../services/teams.js';
+import { ensurePersonalTeam, getUserTeams } from '../services/teams.js';
 
 const createTokenSchema = z.object({ label: z.string().min(1), team_id: z.string().min(1).optional() });
 
@@ -34,7 +34,8 @@ tokensRoutes.post('/tokens', async (c) => {
 
   // Tokens are team-scoped: team_id is required unless exactly one team makes
   // the choice unambiguous. Membership is checked so a token can't be minted
-  // into someone else's team.
+  // into someone else's team. A teamless user gets a personal workspace
+  // created on the fly instead of an error.
   const memberships = getUserTeams(db, user.id);
   const requested = parsed.data.team_id;
   const team =
@@ -42,7 +43,9 @@ tokensRoutes.post('/tokens', async (c) => {
       ? memberships.find((m) => m.team.id === requested)?.team
       : memberships.length === 1
         ? memberships[0]!.team
-        : undefined;
+        : memberships.length === 0
+          ? ensurePersonalTeam(db, user, new Date())
+          : undefined;
   if (!team) {
     return c.json({ error: requested !== undefined ? 'unknown team' : 'team_id is required' }, 400);
   }
