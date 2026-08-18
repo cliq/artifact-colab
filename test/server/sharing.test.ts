@@ -148,7 +148,7 @@ describe('public sharing', () => {
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain('Shared with you');
-    expect(html).not.toContain('Stop sharing'); // the Share menu is members-only
+    expect(html).not.toContain('Who can open this artifact'); // the Share menu is members-only
 
     expect((await app.request(`/d/${slug}/frame`, { headers: { cookie: outsiderCookie } })).status).toBe(200);
 
@@ -160,10 +160,12 @@ describe('public sharing', () => {
     expect((await app.request(`/api/docs/${slug}/export.md`, { headers: { cookie: outsiderCookie } })).status).toBe(200);
   });
 
-  test('the member sees the Share menu with the revoke action', async () => {
+  test('the member sees the Share menu with both visibility options', async () => {
     const page = await app.request(`/d/${slug}`, { headers: { cookie: ownerCookie } });
     const html = await page.text();
-    expect(html).toContain('Stop sharing');
+    expect(html).toContain('Who can open this artifact');
+    expect(html).toContain('Team only');
+    expect(html).toContain('Anyone with the link');
     expect(html).not.toContain('Shared with you');
   });
 

@@ -50,11 +50,20 @@ main { flex: 1 1 auto; min-height: 0; max-width: none; width: 100%; margin: 0; p
 .viewer-toolbar .watch-btn:hover { background: var(--color-bg); color: var(--color-accent); }
 .viewer-toolbar .watch-btn.watching { color: var(--color-accent); }
 .viewer-toolbar .shared-note { font-size: 12px; color: var(--color-muted); background: var(--color-bg); border-radius: 4px; padding: 2px 8px; }
-.share-panel { min-width: 260px; padding: 10px 12px; }
-.share-panel p { font-size: 12px; color: var(--color-muted); margin: 0 0 8px; }
-.share-panel .share-url { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 4px 6px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-bg); color: var(--color-muted); margin-bottom: 8px; }
-.share-panel button { font: inherit; font-size: 12px; padding: 4px 10px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); cursor: pointer; }
-.share-panel button:hover { color: var(--color-accent); border-color: var(--color-accent); }
+.share-panel { width: 300px; padding: 12px 14px; }
+.share-panel h2 { font-size: 13px; font-weight: 600; margin: 0 0 8px; padding: 0 2px; }
+.share-option { display: grid; grid-template-columns: 16px 1fr; gap: 10px; align-items: start; width: 100%; text-align: left; padding: 8px 10px; margin-bottom: 4px; border: 1px solid transparent; border-radius: 8px; background: transparent; font: inherit; color: var(--color-text); cursor: pointer; }
+.share-option:hover { background: var(--color-paper-2); transform: none; }
+.share-option[aria-checked='true'] { background: var(--color-accent-wash); border-color: oklch(85% 0.06 55); }
+.share-option .radio { width: 16px; height: 16px; margin-top: 1px; border-radius: 50%; border: 1.5px solid var(--color-rule-2); background: var(--color-surface); position: relative; }
+.share-option[aria-checked='true'] .radio { border-color: var(--color-accent); }
+.share-option[aria-checked='true'] .radio::after { content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--color-accent); }
+.share-option .name { display: block; font-size: 13px; font-weight: 500; line-height: 1.3; }
+.share-option .hint { display: block; font-size: 12px; font-weight: 400; color: var(--color-muted); line-height: 1.4; margin-top: 1px; }
+.share-link-row { display: flex; gap: 6px; border-top: 1px solid var(--color-border); padding-top: 10px; margin-top: 8px; }
+.share-link-row .share-url { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 11px; color: var(--color-muted); background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 6px; padding: 5px 8px; }
+.share-copy { font: inherit; font-size: 12px; font-weight: 500; padding: 5px 12px; white-space: nowrap; }
+.share-link-note { font-size: 11.5px; color: var(--color-muted); margin: 8px 2px 0; }
 .frame-wrap { flex: 1; min-height: 0; overflow: hidden; background: #fff; }
 #artifact-frame { width: 100%; height: 100%; border: 0; background: #fff; display: block; }
 .sidebar { width: 360px; flex: none; border-left: 1px solid var(--color-border); background: var(--color-surface); display: flex; flex-direction: column; }
@@ -113,29 +122,43 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
             {isMember ? (
               <details class="settings-menu share-menu">
                 <summary>{document.visibility === 'public' ? 'Sharing on' : 'Share'}</summary>
-                <div class="settings-menu-items share-panel">
-                  {document.visibility === 'public' ? (
-                    <>
-                      <p>Anyone signed in with the link can view and comment.</p>
-                      <input class="share-url" type="text" readonly value={shareUrl} onfocus="this.select()" />
-                      <form method="post" action={`/d/${document.id}/share`}>
-                        <input type="hidden" name="_csrf" value={csrfToken} />
-                        <input type="hidden" name="visibility" value="team" />
-                        <input type="hidden" name="next" value={backToUrl} />
-                        <button type="submit">Stop sharing</button>
-                      </form>
-                    </>
-                  ) : (
-                    <>
-                      <p>Team only. Sharing lets anyone signed in with the link view and comment.</p>
-                      <form method="post" action={`/d/${document.id}/share`}>
-                        <input type="hidden" name="_csrf" value={csrfToken} />
-                        <input type="hidden" name="visibility" value="public" />
-                        <input type="hidden" name="next" value={backToUrl} />
-                        <button type="submit">Share with anyone signed in</button>
-                      </form>
-                    </>
-                  )}
+                <div class="settings-menu-items share-panel" role="radiogroup" aria-label="Who can open this artifact">
+                  <h2>Who can open this artifact</h2>
+                  {(
+                    [
+                      { value: 'team', name: 'Team only', hint: 'Only members of your team can view and comment.' },
+                      { value: 'public', name: 'Anyone with the link', hint: 'Anyone signed in with the link can view and comment.' },
+                    ] as const
+                  ).map((option) => (
+                    <form method="post" action={`/d/${document.id}/share`}>
+                      <input type="hidden" name="_csrf" value={csrfToken} />
+                      <input type="hidden" name="visibility" value={option.value} />
+                      <input type="hidden" name="next" value={backToUrl} />
+                      <button
+                        type="submit"
+                        class="share-option"
+                        role="radio"
+                        aria-checked={document.visibility === option.value ? 'true' : 'false'}
+                      >
+                        <span class="radio"></span>
+                        <span>
+                          <span class="name">{option.name}</span>
+                          <span class="hint">{option.hint}</span>
+                        </span>
+                      </button>
+                    </form>
+                  ))}
+                  <div class="share-link-row">
+                    <input class="share-url" type="text" readonly value={shareUrl} onfocus="this.select()" />
+                    <button type="button" id="copy-share-link" class="share-copy">
+                      Copy link
+                    </button>
+                  </div>
+                  <p class="share-link-note">
+                    {document.visibility === 'public'
+                      ? 'Anyone signed in can open this link.'
+                      : 'Right now this link only opens for your team.'}
+                  </p>
                 </div>
               </details>
             ) : (

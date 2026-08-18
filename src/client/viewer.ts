@@ -193,6 +193,24 @@ function init(): void {
     location.href = `${location.pathname}?version=${encodeURIComponent(versionPicker.value)}`;
   });
 
+  const copyLinkButton = document.getElementById('copy-share-link') as HTMLButtonElement | null;
+  copyLinkButton?.addEventListener('click', () => {
+    const urlInput = document.querySelector<HTMLInputElement>('.share-link-row .share-url');
+    if (!urlInput) return;
+    urlInput.select();
+    // execCommand fallback keeps copy working on plain-HTTP instances,
+    // where the async clipboard API is unavailable.
+    if (navigator.clipboard) {
+      void navigator.clipboard.writeText(urlInput.value).catch(() => document.execCommand('copy'));
+    } else {
+      document.execCommand('copy');
+    }
+    copyLinkButton.textContent = 'Copied';
+    window.setTimeout(() => {
+      copyLinkButton.textContent = 'Copy link';
+    }, 2000);
+  });
+
   let threads: ThreadDTO[] = [];
   let lastJson: string | null = null;
   const liveStates = new Map<string, AnchorState>();
