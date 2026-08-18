@@ -6,7 +6,7 @@
  * can't use them, matching the cross-tenant convention for documents.
  */
 
-import { asc, count, eq } from 'drizzle-orm';
+import { and, asc, count, eq, isNull } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -24,7 +24,9 @@ import {
   type AdminTeamListRow,
   type InstanceAdminRow,
   type MemberRow,
+  type OrphanedDocRow,
 } from '../pages/teams.js';
+import { deleteDocumentCascade } from '../services/documents.js';
 import {
   addTeamDomain,
   cancelInvite,
@@ -68,6 +70,23 @@ function memberRows(db: DB, teamId: string): MemberRow[] {
 
 function inviteRows(db: DB, teamId: string) {
   return db.select().from(teamInvites).where(eq(teamInvites.teamId, teamId)).orderBy(asc(teamInvites.createdAt)).all();
+}
+
+/**
+ * Private documents whose creator is no longer on the team: nobody can open
+ * them (private access requires the creator to still be a member), so the
+ * instance admin gets a cleanup surface. Doubles as the authorization check
+ * for the delete route — a document not in this list 404s there.
+ */
+function orphanedPrivateDocRows(db: DB, teamId: string): OrphanedDocRow[] {
+  return db
+    .select({ id: documents.id, title: documents.title, creatorEmail: users.email, createdAt: documents.createdAt })
+    .from(documents)
+    .innerJoin(users, eq(users.id, documents.createdBy))
+    .leftJoin(teamMembers, and(eq(teamMembers.teamId, documents.teamId), eq(teamMembers.userId, documents.createdBy)))
+    .where(and(eq(documents.teamId, teamId), eq(documents.visibility, 'private'), isNull(teamMembers.userId)))
+    .orderBy(asc(documents.createdAt))
+    .all();
 }
 
 async function formString(c: Context<AppEnv>, key: string): Promise<string> {
@@ -187,10 +206,26 @@ adminRoutes.get('/admin/teams/:id', (c) => {
       domains={domains}
       members={memberRows(db, team.id)}
       invites={inviteRows(db, team.id)}
+      orphans={orphanedPrivateDocRows(db, team.id)}
       error={c.req.query('error')}
       notice={c.req.query('notice')}
     />,
   );
+});
+
+adminRoutes.post('/admin/teams/:id/orphans/:docId/delete', (c) => {
+  if (!requireInstanceAdmin(c)) return c.notFound();
+  const db = c.get('db');
+  const team = getTeam(db, c.req.param('id'));
+  if (!team) return c.notFound();
+
+  // Only documents that actually are orphaned private docs of this team can be
+  // deleted here — a forged docId of a live document 404s.
+  const orphan = orphanedPrivateDocRows(db, team.id).find((doc) => doc.id === c.req.param('docId'));
+  if (!orphan) return c.notFound();
+
+  deleteDocumentCascade(db, orphan.id);
+  return redirectWith(c, `/admin/teams/${team.id}`, 'notice', `Deleted "${orphan.title}" permanently.`);
 });
 
 adminRoutes.post('/admin/teams/:id/rename', async (c) => {

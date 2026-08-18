@@ -22,6 +22,14 @@ export interface TeamCounts {
   documents: number;
 }
 
+/** A private document whose creator left the team — invisible to everyone until an instance admin deletes it. */
+export interface OrphanedDocRow {
+  id: string;
+  title: string;
+  creatorEmail: string;
+  createdAt: Date;
+}
+
 const Feedback: FC<{ error?: string; notice?: string }> = ({ error, notice }) => (
   <>
     {error && <p class="error-message">{error}</p>}
@@ -282,9 +290,10 @@ export const AdminTeamPage: FC<{
   domains: TeamDomain[];
   members: MemberRow[];
   invites: TeamInvite[];
+  orphans: OrphanedDocRow[];
   error?: string;
   notice?: string;
-}> = ({ user, csrfToken, team, domains, members, invites, error, notice }) => {
+}> = ({ user, csrfToken, team, domains, members, invites, orphans, error, notice }) => {
   const base = `/admin/teams/${team.id}`;
   return (
     <Layout title={`${team.name} - Admin - Artifact Colab`} user={user} csrfToken={csrfToken} isInstanceAdmin>
@@ -334,6 +343,47 @@ export const AdminTeamPage: FC<{
       </section>
 
       <MembersSection csrfToken={csrfToken} actionBase={base} members={members} invites={invites} />
+
+      {orphans.length > 0 && (
+        <section class="settings-section">
+          <h2>Orphaned private artifacts</h2>
+          <p class="muted">
+            Private artifacts whose creator is no longer on this team. Nobody can open them anymore; deleting them is the
+            only cleanup.
+          </p>
+          <div class="card table-card">
+            <table>
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Creator</th>
+                  <th>Created</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {orphans.map((doc) => (
+                  <tr>
+                    <td>{doc.title}</td>
+                    <td>{doc.creatorEmail}</td>
+                    <td class="muted">
+                      <LocalTime date={doc.createdAt} />
+                    </td>
+                    <td class="cell-actions">
+                      <form method="post" action={`${base}/orphans/${doc.id}/delete`}>
+                        <input type="hidden" name="_csrf" value={csrfToken} />
+                        <button type="submit" class="secondary danger">
+                          Delete permanently
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       <section class="settings-section">
         <h2>Danger zone</h2>

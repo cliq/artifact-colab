@@ -20,8 +20,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createApp } from '../../src/server/app.js';
 import { createSession, getOrCreateUser } from '../../src/server/auth.js';
 import type { AppEnv } from '../../src/server/context.js';
-import { openDb, teams, type DB } from '../../src/server/db/index.js';
-import { getTeamRole, getUserTeams, setTeamRole } from '../../src/server/services/teams.js';
+import { documents, openDb, teams, type DB } from '../../src/server/db/index.js';
+import { getTeamRole, getUserTeams, removeMember, setTeamRole } from '../../src/server/services/teams.js';
 import { baseTestConfig, seedTeamWithDomain } from './teamTestUtils.js';
 
 describe('admin surfaces', () => {
@@ -200,6 +200,54 @@ describe('admin surfaces', () => {
       const res = await post(`/teams/team-1/settings/members/${guest.id}/remove`, teamAdminCookie, {});
       expect(res.status).toBe(302);
       expect(getUserTeams(db, guest.id)).toHaveLength(0);
+    });
+  });
+
+  describe('orphaned private artifacts', () => {
+    const orphanId = 'orphan-doc';
+    const liveId = 'live-private-doc';
+
+    beforeAll(() => {
+      const now = new Date();
+      // A private doc whose creator then leaves the team → orphaned.
+      const exMember = getOrCreateUser(db, 'gone@cliq.dev', now);
+      db.insert(documents)
+        .values({ id: orphanId, title: 'Secret Draft', teamId: 'team-1', createdBy: exMember.id, visibility: 'private', createdAt: now })
+        .run();
+      removeMember(db, 'team-1', exMember.id);
+
+      // A private doc whose creator is still a member → NOT deletable here.
+      const stillHere = getOrCreateUser(db, 'dev@cliq.dev', now);
+      db.insert(documents)
+        .values({ id: liveId, title: 'My Notes', teamId: 'team-1', createdBy: stillHere.id, visibility: 'private', createdAt: now })
+        .run();
+    });
+
+    test('the instance admin team page lists only the orphan', async () => {
+      const html = await (await app.request('/admin/teams/team-1', { headers: { cookie: rootCookie } })).text();
+      expect(html).toContain('Orphaned private artifacts');
+      expect(html).toContain('Secret Draft');
+      expect(html).toContain('gone@cliq.dev');
+      expect(html).not.toContain('My Notes');
+    });
+
+    test('non-instance-admins cannot delete an orphan', async () => {
+      expect((await post(`/admin/teams/team-1/orphans/${orphanId}/delete`, teamAdminCookie, {})).status).toBe(404);
+      expect((await post(`/admin/teams/team-1/orphans/${orphanId}/delete`, memberCookie, {})).status).toBe(404);
+    });
+
+    test("a live private document can't be deleted through the orphan route", async () => {
+      expect((await post(`/admin/teams/team-1/orphans/${liveId}/delete`, rootCookie, {})).status).toBe(404);
+      expect(db.select().from(documents).all().some((d) => d.id === liveId)).toBe(true);
+    });
+
+    test('the instance admin deletes the orphan; the section disappears', async () => {
+      const res = await post(`/admin/teams/team-1/orphans/${orphanId}/delete`, rootCookie, {});
+      expect(res.status).toBe(302);
+      expect(db.select().from(documents).all().some((d) => d.id === orphanId)).toBe(false);
+
+      const html = await (await app.request('/admin/teams/team-1', { headers: { cookie: rootCookie } })).text();
+      expect(html).not.toContain('Orphaned private artifacts');
     });
   });
 });
