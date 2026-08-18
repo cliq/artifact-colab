@@ -226,6 +226,16 @@ describe('public sharing', () => {
     expect(await home.text()).not.toContain('Launch Plan');
   });
 
+  test('the share panel marks the current visibility checked, with its CSS unescaped', async () => {
+    const page = await (await app.request(`/d/${slug}`, { headers: { cookie: ownerCookie } })).text();
+    // The checked option is only visible if its style rule survives: JSX
+    // escaping once turned the quotes in this selector into &#39;, which
+    // browsers never decode inside <style>, silently dropping the rule.
+    expect(page).toContain(".share-option[aria-checked='true']");
+    const options = [...page.matchAll(/<input type="hidden" name="visibility" value="(\w+)"[\s\S]*?aria-checked="(\w+)"/g)];
+    expect(options.map(([, value, state]) => `${value}:${state}`)).toEqual(['private:false', 'team:true', 'public:false']);
+  });
+
   test('findDocumentForViewer reports membership', async () => {
     expect(findDocumentForViewer(db, slug, ownerId)).toMatchObject({ isMember: true });
     db.update(documents).set({ visibility: 'public' }).where(eq(documents.id, slug)).run();

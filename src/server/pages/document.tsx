@@ -99,7 +99,10 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
   }).replaceAll('<', '\\u003c');
   return (
     <Layout title={document.title} user={user} csrfToken={csrfToken}>
-      <style>{viewerCss}</style>
+      {/* Raw injection, not a text child: JSX escaping would turn the quotes in
+          [aria-checked='true'] and content: '' into &#39;, which browsers never
+          decode inside <style>, silently dropping those rules. */}
+      <style dangerouslySetInnerHTML={{ __html: viewerCss }}></style>
       <script id="viewer-data" type="application/json" dangerouslySetInnerHTML={{ __html: viewerData }}></script>
       <div class="viewer">
         <div class="viewer-main">
