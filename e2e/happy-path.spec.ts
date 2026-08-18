@@ -308,6 +308,34 @@ test.describe('happy path', () => {
     await page.locator('main h1').click(); // close the menu again
   });
 
+  test('picking a share option applies it while the panel stays open', async () => {
+    const shareMenu = page.locator('.viewer-toolbar details.share-menu');
+    await shareMenu.locator('summary').click();
+
+    // Alice created this doc, so all three options show, with the default checked.
+    const options = shareMenu.locator('.share-option');
+    await expect(options).toHaveCount(3);
+    await expect(options.nth(1)).toHaveAttribute('aria-checked', 'true');
+
+    await options.nth(2).click(); // Anyone with the link
+    // Applied in place: the panel is still open for copying the link, the
+    // caption and menu label reflect the new visibility, no page reload.
+    await expect(options.nth(2)).toHaveAttribute('aria-checked', 'true');
+    await expect(options.nth(1)).toHaveAttribute('aria-checked', 'false');
+    await expect(shareMenu.locator('.share-link-note')).toHaveText('Anyone signed in can open this link.');
+    await expect(shareMenu.locator('summary')).toHaveText('Sharing on');
+    await expect(shareMenu).toHaveAttribute('open', '');
+
+    // The change really persisted server-side.
+    const res = await page.request.get(`/api/docs/${slug}`);
+    expect(((await res.json()) as { document: { visibility: string } }).document.visibility).toBe('public');
+
+    await options.nth(1).click(); // back to Team only, leaving the suite's state untouched
+    await expect(options.nth(1)).toHaveAttribute('aria-checked', 'true');
+    await expect(shareMenu.locator('summary')).toHaveText('Share');
+    await page.locator('main h1').click(); // close the menu again
+  });
+
   test('export.json includes the comment and its reply', async () => {
     const res = await page.request.get(`/api/docs/${slug}/export.json`);
     expect(res.ok()).toBeTruthy();

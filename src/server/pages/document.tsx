@@ -83,9 +83,41 @@ main { flex: 1 1 auto; min-height: 0; max-width: none; width: 100%; margin: 0; p
 @media (max-width: 900px) { .sidebar { width: 300px; } }
 `;
 
+/**
+ * One entry per visibility: `summary` labels the collapsed Share menu, `note`
+ * captions the link box. Both ride along as data attributes so the client can
+ * apply a change in place without duplicating the strings.
+ */
+const shareOptions = [
+  {
+    value: 'private',
+    name: 'Only you',
+    hint: 'Hidden from the rest of the team. Existing comments stay in the document.',
+    summary: 'Private',
+    note: 'Right now this link only opens for you.',
+  },
+  {
+    value: 'team',
+    name: 'Team only',
+    hint: 'Only members of your team can view and comment.',
+    summary: 'Share',
+    note: 'Right now this link only opens for your team.',
+  },
+  {
+    value: 'public',
+    name: 'Anyone with the link',
+    hint: 'Anyone signed in with the link can view and comment.',
+    summary: 'Sharing on',
+    note: 'Anyone signed in can open this link.',
+  },
+] as const;
+
 export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document, versions, shownVersion, watching, canDelete, isMember, shareUrl }) => {
   const backToUrl =
     shownVersion.id === document.currentVersionId ? `/d/${document.id}` : `/d/${document.id}?version=${shownVersion.number}`;
+  // Only the creator can make a document private (the server enforces it too).
+  const visibleShareOptions = shareOptions.filter((o) => o.value !== 'private' || document.createdBy === user.id);
+  const currentShare = shareOptions.find((o) => o.value === document.visibility) ?? shareOptions[1];
   // Rendered via dangerouslySetInnerHTML: JSX would entity-escape the JSON,
   // and entities are never decoded inside a <script> element. Escaping "<"
   // keeps a "</script>" inside any value from breaking out of the block.
@@ -124,19 +156,10 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
             </label>
             {isMember ? (
               <details class="settings-menu share-menu">
-                <summary>
-                  {document.visibility === 'public' ? 'Sharing on' : document.visibility === 'private' ? 'Private' : 'Share'}
-                </summary>
+                <summary>{currentShare.summary}</summary>
                 <div class="settings-menu-items share-panel" role="radiogroup" aria-label="Who can open this artifact">
                   <h2>Who can open this artifact</h2>
-                  {[
-                    // Only the creator can make a document private (the server enforces it too).
-                    ...(document.createdBy === user.id
-                      ? [{ value: 'private', name: 'Only you', hint: 'Hidden from the rest of the team. Existing comments stay in the document.' }]
-                      : []),
-                    { value: 'team', name: 'Team only', hint: 'Only members of your team can view and comment.' },
-                    { value: 'public', name: 'Anyone with the link', hint: 'Anyone signed in with the link can view and comment.' },
-                  ].map((option) => (
+                  {visibleShareOptions.map((option) => (
                     <form method="post" action={`/d/${document.id}/share`}>
                       <input type="hidden" name="_csrf" value={csrfToken} />
                       <input type="hidden" name="visibility" value={option.value} />
@@ -146,6 +169,8 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
                         class="share-option"
                         role="radio"
                         aria-checked={document.visibility === option.value ? 'true' : 'false'}
+                        data-summary={option.summary}
+                        data-note={option.note}
                       >
                         <span class="radio"></span>
                         <span>
@@ -161,13 +186,7 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
                       Copy link
                     </button>
                   </div>
-                  <p class="share-link-note">
-                    {document.visibility === 'public'
-                      ? 'Anyone signed in can open this link.'
-                      : document.visibility === 'private'
-                        ? 'Right now this link only opens for you.'
-                        : 'Right now this link only opens for your team.'}
-                  </p>
+                  <p class="share-link-note">{currentShare.note}</p>
                 </div>
               </details>
             ) : (

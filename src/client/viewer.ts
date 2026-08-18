@@ -211,6 +211,32 @@ function init(): void {
     }, 2000);
   });
 
+  // Share options apply in place: the panel stays open so the link can be
+  // copied right after changing who it opens for, with the caption and menu
+  // label refreshed to match. The plain form POST (full reload, panel closed)
+  // remains the no-JS fallback.
+  document.querySelectorAll<HTMLFormElement>('.share-panel form').forEach((form) => {
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const clicked = form.querySelector<HTMLButtonElement>('.share-option');
+      if (!clicked) return;
+      const body = new URLSearchParams();
+      new FormData(form).forEach((value, key) => body.append(key, String(value)));
+      fetch(form.action, { method: 'POST', body })
+        .then((res) => {
+          if (!res.ok) throw new Error(`share failed: ${res.status}`);
+          document.querySelectorAll('.share-option').forEach((option) => {
+            option.setAttribute('aria-checked', option === clicked ? 'true' : 'false');
+          });
+          const note = document.querySelector('.share-link-note');
+          if (note && clicked.dataset['note']) note.textContent = clicked.dataset['note'];
+          const summary = document.querySelector('.share-menu summary');
+          if (summary && clicked.dataset['summary']) summary.textContent = clicked.dataset['summary'];
+        })
+        .catch(() => form.submit());
+    });
+  });
+
   let threads: ThreadDTO[] = [];
   let lastJson: string | null = null;
   const liveStates = new Map<string, AnchorState>();
