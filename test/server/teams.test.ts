@@ -140,8 +140,8 @@ describe('findDocumentForUser / findDocumentInTeam', () => {
     expect(findDocumentForUser(db, 'doc-1', outsider.id)).toBeUndefined();
     expect(findDocumentForUser(db, 'nope', member.id)).toBeUndefined();
 
-    expect(findDocumentInTeam(db, 'doc-1', 'team-1')?.id).toBe('doc-1');
-    expect(findDocumentInTeam(db, 'doc-1', 'team-2')).toBeUndefined();
+    expect(findDocumentInTeam(db, 'doc-1', 'team-1', member.id)?.id).toBe('doc-1');
+    expect(findDocumentInTeam(db, 'doc-1', 'team-2', outsider.id)).toBeUndefined();
   });
 
   test('a member of both teams sees both teams’ documents', () => {

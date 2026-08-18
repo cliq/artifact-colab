@@ -108,8 +108,9 @@ documentRoutes.get('/d/:slug', (c) => {
   );
 });
 
-// Any member may toggle sharing (consistent with the flat publish/comment
-// model); non-members 404 like every other member-gated action.
+// Any member may toggle team/public (consistent with the flat publish/comment
+// model); only the creator may make a document private. Non-members 404 like
+// every other member-gated action.
 documentRoutes.post('/d/:slug/share', async (c) => {
   const user = c.get('user');
   const db = c.get('db');
@@ -123,7 +124,10 @@ documentRoutes.post('/d/:slug/share', async (c) => {
   if (!doc) return c.notFound();
 
   const visibility = body['visibility'];
-  if (!isDocumentVisibility(visibility)) return c.text('visibility must be "team" or "public"', 400);
+  if (!isDocumentVisibility(visibility)) return c.text('visibility must be "team", "public" or "private"', 400);
+  if (visibility === 'private' && doc.createdBy !== user.id) {
+    return c.text('only the creator of a document can make it private', 403);
+  }
   setDocumentVisibility(db, doc, visibility);
 
   const requested = typeof body['next'] === 'string' ? body['next'] : undefined;

@@ -8,7 +8,7 @@
  * `.js`-suffixed relative imports regardless of source extension.
  */
 
-import { count, eq, and, isNull, desc } from 'drizzle-orm';
+import { count, eq, and, isNull, desc, ne, or } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
 
@@ -57,14 +57,16 @@ function documentRow(db: DB, doc: Document): DocumentListRow {
     versionCount,
     openCommentCount,
     lastPublishedAt: latest?.publishedAt ?? null,
+    isPrivate: doc.visibility === 'private',
   };
 }
 
-function documentRowsForTeam(db: DB, teamId: string): DocumentListRow[] {
+/** A team's documents, minus other users' private ones — those exist only for their creator. */
+function documentRowsForTeam(db: DB, teamId: string, userId: string): DocumentListRow[] {
   return db
     .select()
     .from(documents)
-    .where(eq(documents.teamId, teamId))
+    .where(and(eq(documents.teamId, teamId), or(ne(documents.visibility, 'private'), eq(documents.createdBy, userId))))
     .orderBy(desc(documents.createdAt))
     .all()
     .map((doc) => documentRow(db, doc));
@@ -107,7 +109,7 @@ pageRoutes.get('/', sessionAuth({ redirect: true }), (c) => {
     teamId: membership.team.id,
     teamName: membership.team.name,
     isTeamAdmin: membership.role === 'admin',
-    documents: documentRowsForTeam(db, membership.team.id),
+    documents: documentRowsForTeam(db, membership.team.id, user.id),
   }));
 
   const wizard =

@@ -89,8 +89,11 @@ export function publishArtifact(db: DB, config: Config, user: User, teamId: stri
   let docId: string;
   let versionNumber: number;
   if (existingId !== undefined) {
-    const doc = findDocumentInTeam(db, existingId, teamId);
+    const doc = findDocumentInTeam(db, existingId, teamId, user.id);
     if (!doc) return { ok: false, status: 404, error: `unknown document_id: ${existingId}` };
+    if (input.visibility === 'private' && doc.createdBy !== user.id) {
+      return { ok: false, status: 400, error: 'only the creator of a document can make it private' };
+    }
     docId = doc.id;
     const latest = db
       .select({ number: versions.number })

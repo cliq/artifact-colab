@@ -16,6 +16,8 @@ export interface DocumentListRow {
   versionCount: number;
   openCommentCount: number;
   lastPublishedAt: Date | null;
+  /** Private documents are listed only for their creator, with a badge. */
+  isPrivate: boolean;
 }
 
 export interface TeamDocumentsGroup {
@@ -57,6 +59,11 @@ const DocumentsTable: FC<{ documents: DocumentListRow[] }> = ({ documents }) => 
         <tr>
           <td>
             <a href={`/d/${doc.id}`}>{doc.title}</a>
+            {doc.isPrivate && (
+              <span class="private-badge" title="Only you can open this artifact">
+                Private
+              </span>
+            )}
           </td>
           <td>{doc.versionCount}</td>
           <td>{doc.openCommentCount}</td>

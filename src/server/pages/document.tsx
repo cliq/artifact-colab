@@ -121,15 +121,19 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
             </label>
             {isMember ? (
               <details class="settings-menu share-menu">
-                <summary>{document.visibility === 'public' ? 'Sharing on' : 'Share'}</summary>
+                <summary>
+                  {document.visibility === 'public' ? 'Sharing on' : document.visibility === 'private' ? 'Private' : 'Share'}
+                </summary>
                 <div class="settings-menu-items share-panel" role="radiogroup" aria-label="Who can open this artifact">
                   <h2>Who can open this artifact</h2>
-                  {(
-                    [
-                      { value: 'team', name: 'Team only', hint: 'Only members of your team can view and comment.' },
-                      { value: 'public', name: 'Anyone with the link', hint: 'Anyone signed in with the link can view and comment.' },
-                    ] as const
-                  ).map((option) => (
+                  {[
+                    // Only the creator can make a document private (the server enforces it too).
+                    ...(document.createdBy === user.id
+                      ? [{ value: 'private', name: 'Only you', hint: 'Hidden from the rest of the team. Existing comments stay in the document.' }]
+                      : []),
+                    { value: 'team', name: 'Team only', hint: 'Only members of your team can view and comment.' },
+                    { value: 'public', name: 'Anyone with the link', hint: 'Anyone signed in with the link can view and comment.' },
+                  ].map((option) => (
                     <form method="post" action={`/d/${document.id}/share`}>
                       <input type="hidden" name="_csrf" value={csrfToken} />
                       <input type="hidden" name="visibility" value={option.value} />
@@ -157,7 +161,9 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
                   <p class="share-link-note">
                     {document.visibility === 'public'
                       ? 'Anyone signed in can open this link.'
-                      : 'Right now this link only opens for your team.'}
+                      : document.visibility === 'private'
+                        ? 'Right now this link only opens for you.'
+                        : 'Right now this link only opens for your team.'}
                   </p>
                 </div>
               </details>

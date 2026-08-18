@@ -65,10 +65,10 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, teamId: st
         markdown: z.string().min(1).optional().describe('Markdown (GFM) source (max 5 MB); exactly one of html/markdown'),
         document_id: z.string().optional().describe('Existing document ID to publish a new version of'),
         visibility: z
-          .enum(['team', 'public'])
+          .enum(['team', 'public', 'private'])
           .optional()
           .describe(
-            "Who can open the URL: 'team' (members only, the default for new documents) or 'public' (anyone signed in on the instance who has the link). Omitted on a republish keeps the document's current setting",
+            "Who can open the URL: 'team' (members only, the default for new documents), 'public' (anyone signed in on the instance who has the link), or 'private' (only the creator; hidden from the rest of the team — only the creator can set it). Omitted on a republish keeps the document's current setting",
           ),
         assets: z
           .array(
@@ -107,6 +107,9 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, teamId: st
       if (visibility === 'public') {
         lines.push('The URL is shareable with anyone signed in on this instance.');
       }
+      if (visibility === 'private') {
+        lines.push('The document is private: only its creator can open it; it is hidden from the rest of the team.');
+      }
       if (outcome.orphaned > 0) {
         const n = outcome.orphaned;
         lines.push(`${n} previously-anchored comment${n === 1 ? '' : 's'} no longer match and ${n === 1 ? 'is' : 'are'} orphaned.`);
@@ -137,7 +140,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, teamId: st
       }),
     },
     async ({ document_id, version }) => {
-      const doc = findDocumentInTeam(db, document_id, teamId);
+      const doc = findDocumentInTeam(db, document_id, teamId, user.id);
       if (!doc) return toolError(`unknown document_id: ${document_id}`);
 
       const row = findVersion(db, doc, version);
@@ -153,6 +156,9 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, teamId: st
       const headerLines = [`"${doc.title}" — version ${row.number} of ${doc.id}${isMarkdown ? ' (published as Markdown)' : ''}`];
       if (doc.visibility === 'public') {
         headerLines.push('Visibility: public (anyone signed in on the instance can open the URL).');
+      }
+      if (doc.visibility === 'private') {
+        headerLines.push('Visibility: private (only the creator can open it; hidden from the rest of the team).');
       }
       if (assetNames.length > 0) {
         headerLines.push(`Referenced assets (stored separately, substituted when rendering): ${assetNames.join(', ')}`);
@@ -191,7 +197,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, teamId: st
       }),
     },
     async ({ document_id, status }) => {
-      const doc = findDocumentInTeam(db, document_id, teamId);
+      const doc = findDocumentInTeam(db, document_id, teamId, user.id);
       if (!doc) return toolError(`unknown document_id: ${document_id}`);
       let topLevel = sortTopLevel(topLevelCommentsFor(db, doc.id));
       if (status) topLevel = topLevel.filter((c) => c.status === status);
@@ -219,7 +225,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, teamId: st
       inputSchema: z.object({ comment_id: z.string() }),
     },
     async ({ comment_id }) => {
-      const owned = findOwnedTopLevelComment(db, comment_id, { teamId });
+      const owned = findOwnedTopLevelComment(db, comment_id, { teamId, userId: user.id });
       if (!owned) return toolError(`unknown comment_id (or not a top-level comment): ${comment_id}`);
       db.update(comments)
         .set({ status: 'resolved', resolvedAt: new Date(), resolvedBy: user.id })
@@ -239,7 +245,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, teamId: st
       inputSchema: z.object({ document_id: z.string() }),
     },
     async ({ document_id }) => {
-      const doc = findDocumentInTeam(db, document_id, teamId);
+      const doc = findDocumentInTeam(db, document_id, teamId, user.id);
       if (!doc) return toolError(`unknown document_id: ${document_id}`);
       if (doc.createdBy !== user.id) {
         return toolError(`document ${document_id} was created by another user; only its creator can delete it`);

@@ -34,7 +34,7 @@ publishRoutes.use('/api/docs/:slug/raw', bearerAuth());
 
 publishRoutes.get('/api/docs/:slug/raw', (c) => {
   const db = c.get('db');
-  const doc = findDocumentInTeam(db, c.req.param('slug'), c.get('tokenTeamId'));
+  const doc = findDocumentInTeam(db, c.req.param('slug'), c.get('tokenTeamId'), c.get('user').id);
   if (!doc) return c.json({ error: 'not found' }, 404);
 
   const versionParam = c.req.query('version');
@@ -75,7 +75,7 @@ publishRoutes.post('/api/publish', async (c) => {
 
   const visibilityField = body['visibility'];
   if (visibilityField !== undefined && visibilityField !== '' && !isDocumentVisibility(visibilityField)) {
-    return c.json({ error: 'visibility must be "team" or "public"' }, 400);
+    return c.json({ error: 'visibility must be "team", "public" or "private"' }, 400);
   }
   const visibility = visibilityField === '' || visibilityField === undefined ? undefined : visibilityField;
 

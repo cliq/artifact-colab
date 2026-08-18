@@ -166,9 +166,11 @@ export const documents = sqliteTable(
       .notNull()
       .references(() => users.id),
     /**
-     * 'team' | 'public'. 'public' widens read/interact access to any signed-in
-     * user who has the URL — the slug is the link secret; the document is
-     * never listed for non-members. Ownership stays with `teamId`.
+     * 'team' | 'public' | 'private'. 'public' widens read/interact access to
+     * any signed-in user who has the URL — the slug is the link secret; the
+     * document is never listed for non-members. 'private' narrows it to
+     * `createdBy` alone: teammates 404 and don't see it listed. Ownership
+     * stays with `teamId` either way.
      */
     visibility: text('visibility').notNull().default('team'),
     /** No FK to `versions.id` to avoid a circular reference between the two tables. */

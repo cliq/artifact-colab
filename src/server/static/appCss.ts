@@ -256,6 +256,21 @@ p {
   color: var(--color-muted);
 }
 
+/* "Private" marker on the document list, next to the title. */
+.private-badge {
+  margin-left: 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  background: var(--color-paper-2);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-pill);
+  padding: 0.1rem 0.5rem;
+  vertical-align: 1px;
+}
+
 .card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);

@@ -5,24 +5,26 @@
  * the list of document-scoped children lives in one place.
  */
 
-import { and, eq, inArray, notInArray } from 'drizzle-orm';
+import { and, eq, inArray, ne, notInArray } from 'drizzle-orm';
 
 import type { DB, DBOrTx } from '../db/index.js';
 import { assets, commentAnchorStates, comments, documents, teamMembers, versions, watches, type Document } from '../db/schema.js';
 
-export type DocumentVisibility = 'team' | 'public';
+export type DocumentVisibility = 'team' | 'public' | 'private';
 
 export function isDocumentVisibility(value: unknown): value is DocumentVisibility {
-  return value === 'team' || value === 'public';
+  return value === 'team' || value === 'public' || value === 'private';
 }
 
 /**
  * The one flip path for a document's visibility (Share menu, publish with an
- * explicit visibility). Flipping back to 'team' deletes non-members' watch
- * rows in the same transaction — the digest sweep emails every 'watching' row
- * without re-checking access, so a revoked outsider's watch would keep mailing
- * them comments (same invariant as `removeMember`). Pruning also drops the
- * document from those users' "Shared with you" list.
+ * explicit visibility). Narrowing deletes the watch rows of everyone who loses
+ * access in the same transaction — the digest sweep emails every 'watching' row
+ * without re-checking access, so a stale watch would keep mailing someone
+ * comments on a document they can no longer open (same invariant as
+ * `removeMember`). Pruning also drops the document from those users'
+ * "Shared with you" list. 'team' prunes non-members; 'private' prunes everyone
+ * but the creator.
  */
 export function setDocumentVisibility(db: DB, document: Document, visibility: DocumentVisibility): void {
   db.transaction((tx) => {
@@ -36,6 +38,10 @@ export function setDocumentVisibility(db: DB, document: Document, visibility: Do
         .map((m) => m.userId);
       tx.delete(watches)
         .where(and(eq(watches.documentId, document.id), notInArray(watches.userId, memberIds)))
+        .run();
+    } else if (visibility === 'private') {
+      tx.delete(watches)
+        .where(and(eq(watches.documentId, document.id), ne(watches.userId, document.createdBy)))
         .run();
     }
   });

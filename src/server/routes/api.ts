@@ -7,7 +7,7 @@
 
 import { randomBytes } from 'node:crypto';
 
-import { and, asc, eq, isNotNull, isNull, or } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull, ne, or } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -45,13 +45,18 @@ async function readJson(c: Context<AppEnv>): Promise<unknown> {
   }
 }
 
-/** The document, if the user is a member of its team; membership is part of the query so outsiders see a 404. */
+/**
+ * The document, if the user is a member of its team; membership is part of the
+ * query so outsiders see a 404. Private documents match only for their creator
+ * — a teammate can't act on (or even confirm the existence of) someone else's
+ * private document.
+ */
 export function findDocumentForUser(db: DB, slug: string, userId: string): Document | undefined {
   const row = db
     .select({ document: documents })
     .from(documents)
     .innerJoin(teamMembers, and(eq(teamMembers.teamId, documents.teamId), eq(teamMembers.userId, userId)))
-    .where(eq(documents.id, slug))
+    .where(and(eq(documents.id, slug), or(ne(documents.visibility, 'private'), eq(documents.createdBy, userId))))
     .get();
   return row?.document;
 }
@@ -64,8 +69,9 @@ export interface ViewerDocument {
 
 /**
  * Read/interact access: team members always, any signed-in user when the
- * document is public. Non-matches stay indistinguishable from nonexistent
- * documents (404), including public documents flipped back to team-only.
+ * document is public, only the creator when it is private. Non-matches stay
+ * indistinguishable from nonexistent documents (404), including public
+ * documents flipped back to team-only and private documents' teammates.
  * Member-gated actions (delete, share toggle) use `findDocumentForUser`.
  */
 export function findDocumentForViewer(db: DB, slug: string, userId: string): ViewerDocument | undefined {
@@ -73,14 +79,37 @@ export function findDocumentForViewer(db: DB, slug: string, userId: string): Vie
     .select({ document: documents, memberId: teamMembers.userId })
     .from(documents)
     .leftJoin(teamMembers, and(eq(teamMembers.teamId, documents.teamId), eq(teamMembers.userId, userId)))
-    .where(and(eq(documents.id, slug), or(isNotNull(teamMembers.userId), eq(documents.visibility, 'public'))))
+    .where(
+      and(
+        eq(documents.id, slug),
+        or(
+          and(eq(documents.visibility, 'private'), eq(documents.createdBy, userId)),
+          and(ne(documents.visibility, 'private'), or(isNotNull(teamMembers.userId), eq(documents.visibility, 'public'))),
+        ),
+      ),
+    )
     .get();
   return row ? { document: row.document, isMember: row.memberId !== null } : undefined;
 }
 
-/** The document, if it belongs to the given team — the scope check for bearer-token (team-scoped) access. */
-export function findDocumentInTeam(db: DB, slug: string, teamId: string): Document | undefined {
-  return db.select().from(documents).where(and(eq(documents.id, slug), eq(documents.teamId, teamId))).get();
+/**
+ * The document, if it belongs to the given team — the scope check for
+ * bearer-token (team-scoped) access. `userId` is the token's user: private
+ * documents match only for their creator, so a teammate's token can't read or
+ * republish them.
+ */
+export function findDocumentInTeam(db: DB, slug: string, teamId: string, userId: string): Document | undefined {
+  return db
+    .select()
+    .from(documents)
+    .where(
+      and(
+        eq(documents.id, slug),
+        eq(documents.teamId, teamId),
+        or(ne(documents.visibility, 'private'), eq(documents.createdBy, userId)),
+      ),
+    )
+    .get();
 }
 
 /** A document's version by number, or its current version when no number is given. */
@@ -207,15 +236,15 @@ export function topLevelCommentsFor(db: DB, documentId: string): Comment[] {
 export function findOwnedTopLevelComment(
   db: DB,
   commentId: string,
-  access: { userId: string } | { teamId: string },
+  access: { userId: string } | { teamId: string; userId: string },
 ): { comment: Comment; document: Document } | undefined {
   const comment = db.select().from(comments).where(eq(comments.id, commentId)).get();
   if (!comment || comment.parentId !== null) return undefined;
 
   const document =
-    'userId' in access
-      ? findDocumentForViewer(db, comment.documentId, access.userId)?.document
-      : findDocumentInTeam(db, comment.documentId, access.teamId);
+    'teamId' in access
+      ? findDocumentInTeam(db, comment.documentId, access.teamId, access.userId)
+      : findDocumentForViewer(db, comment.documentId, access.userId)?.document;
   if (!document) return undefined;
 
   return { comment, document };
