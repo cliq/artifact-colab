@@ -32,6 +32,7 @@ import { frameRoutes } from '../../src/server/routes/frame.js';
 import { pageRoutes } from '../../src/server/routes/pages.js';
 import { indexVersionHtml } from '../../src/server/services/anchorStates.js';
 import { publishArtifact } from '../../src/server/services/publish.js';
+import { removeMember } from '../../src/server/services/teams.js';
 import { baseTestConfig, seedTeamWithDomain } from './teamTestUtils.js';
 
 const QUOTE = 'The budget draft still needs numbers.';
@@ -233,5 +234,25 @@ describe('private visibility', () => {
     expect(comments.status).toBe(200);
     const payload = (await comments.json()) as { comments: { body: string }[] };
     expect(payload.comments.map((c) => c.body)).toContain('Numbers?');
+  });
+
+  test('a creator removed from the team loses access to their private document', async () => {
+    // Back to private first (the previous test flipped it to team).
+    expect((await app.request(`/d/${slug}/share`, postForm(creatorCookie, { visibility: 'private' }))).status).toBe(302);
+
+    expect(removeMember(db, 'team-example', creator.id)).toBe(true);
+
+    for (const path of [`/api/docs/${slug}`, `/api/docs/${slug}/comments`, `/api/docs/${slug}/export.json`]) {
+      expect((await app.request(path, { headers: { cookie: creatorCookie } })).status).toBe(404);
+    }
+    expect((await app.request(`/d/${slug}`, { headers: { cookie: creatorCookie } })).status).toBe(404);
+    expect((await app.request(`/d/${slug}/frame`, { headers: { cookie: creatorCookie } })).status).toBe(404);
+
+    // Nor can they comment (and auto-watch) their way back in.
+    const res = await app.request(
+      `/api/docs/${slug}/comments`,
+      postJson(creatorCookie, { body: 'Still here?', quotedText: QUOTE, anchor: buildAnchor(QUOTE), versionId: v1Id }),
+    );
+    expect(res.status).toBe(404);
   });
 });

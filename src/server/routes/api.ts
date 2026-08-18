@@ -69,10 +69,13 @@ export interface ViewerDocument {
 
 /**
  * Read/interact access: team members always, any signed-in user when the
- * document is public, only the creator when it is private. Non-matches stay
- * indistinguishable from nonexistent documents (404), including public
- * documents flipped back to team-only and private documents' teammates.
- * Member-gated actions (delete, share toggle) use `findDocumentForUser`.
+ * document is public, only the creator — while still a member — when it is
+ * private. A creator removed from the team loses private access like any other
+ * revoked member (same convention as public docs: an ex-member creator is a
+ * guest, not an owner). Non-matches stay indistinguishable from nonexistent
+ * documents (404), including public documents flipped back to team-only and
+ * private documents' teammates. Member-gated actions (delete, share toggle)
+ * use `findDocumentForUser`.
  */
 export function findDocumentForViewer(db: DB, slug: string, userId: string): ViewerDocument | undefined {
   const row = db
@@ -83,7 +86,7 @@ export function findDocumentForViewer(db: DB, slug: string, userId: string): Vie
       and(
         eq(documents.id, slug),
         or(
-          and(eq(documents.visibility, 'private'), eq(documents.createdBy, userId)),
+          and(eq(documents.visibility, 'private'), eq(documents.createdBy, userId), isNotNull(teamMembers.userId)),
           and(ne(documents.visibility, 'private'), or(isNotNull(teamMembers.userId), eq(documents.visibility, 'public'))),
         ),
       ),
