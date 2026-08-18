@@ -25,6 +25,8 @@ interface AuthorDTO {
   email: string;
   name: string | null;
   avatarUrl: string;
+  /** Author is not a member of the document's team (public-doc guest). */
+  isGuest: boolean;
 }
 
 interface ReplyDTO {
@@ -71,6 +73,7 @@ const SIDEBAR_CSS = `
 .badge { display: inline-block; font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; padding: 1px 6px; border-radius: 3px; margin-right: 4px; }
 .badge-orphaned { background: #fee2e2; color: #b91c1c; }
 .badge-ambiguous { background: #fef3c7; color: #92400e; }
+.badge-guest { background: var(--color-paper-2); color: var(--color-muted); border: 1px solid var(--color-border); padding: 0 5px; }
 .thread-meta { font-size: 11px; color: var(--color-muted); margin-bottom: 4px; display: flex; align-items: center; gap: 5px; }
 .thread-meta .author { font-weight: 600; color: var(--color-ink); }
 .thread-meta .avatar { width: 16px; height: 16px; border-radius: 50%; flex: none; }
@@ -123,16 +126,20 @@ function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-/** Gravatar + display name (profile name when set, email otherwise) + relative time. */
+/** Gravatar + display name (profile name when set, email otherwise) + guest badge + relative time. */
 function authorMeta(author: AuthorDTO, createdAt: string): HTMLElement {
-  return el('div', { className: 'thread-meta' }, [
+  const parts: (Node | string)[] = [
     el('img', {
       className: 'avatar',
       attrs: { src: author.avatarUrl, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' },
     }),
     el('span', { className: 'author', attrs: { title: author.email }, text: author.name ?? author.email }),
-    document.createTextNode(` · ${formatTime(createdAt)}`),
-  ]);
+  ];
+  if (author.isGuest) {
+    parts.push(el('span', { className: 'badge badge-guest', text: 'guest', attrs: { title: 'Not a member of this team' } }));
+  }
+  parts.push(document.createTextNode(` · ${formatTime(createdAt)}`));
+  return el('div', { className: 'thread-meta' }, parts);
 }
 
 const NEWLINE_HINT = 'Enter to send · Shift+Enter for a line break';

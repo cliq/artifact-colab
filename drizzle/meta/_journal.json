@@ -43,6 +43,13 @@
       "when": 1786171639103,
       "tag": "0005_markdown-source",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1787060892189,
+      "tag": "0006_public-sharing",
+      "breakpoints": true
     }
   ]
 }

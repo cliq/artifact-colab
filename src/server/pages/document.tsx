@@ -19,8 +19,12 @@ export interface DocumentPageProps {
   shownVersion: Pick<Version, 'id' | 'number' | 'publishedAt'>;
   /** Whether the signed-in user watches this document (comment digest emails). */
   watching: boolean;
-  /** Whether the signed-in user may delete this document (author or team admin). */
+  /** Whether the signed-in user may delete this document (member and author-or-team-admin). */
   canDelete: boolean;
+  /** Members get the Share menu; guests on a public document get a "Shared with you" note instead. */
+  isMember: boolean;
+  /** Absolute URL of the document, shown in the Share menu when public. */
+  shareUrl: string;
 }
 
 const viewerCss = `
@@ -45,6 +49,12 @@ main { flex: 1 1 auto; min-height: 0; max-width: none; width: 100%; margin: 0; p
 .viewer-toolbar .watch-btn { font: inherit; font-size: 13px; color: var(--color-muted); padding: 4px 8px; border: none; border-radius: 6px; background: transparent; cursor: pointer; transition: background 150ms ease-out, color 150ms ease-out; }
 .viewer-toolbar .watch-btn:hover { background: var(--color-bg); color: var(--color-accent); }
 .viewer-toolbar .watch-btn.watching { color: var(--color-accent); }
+.viewer-toolbar .shared-note { font-size: 12px; color: var(--color-muted); background: var(--color-bg); border-radius: 4px; padding: 2px 8px; }
+.share-panel { min-width: 260px; padding: 10px 12px; }
+.share-panel p { font-size: 12px; color: var(--color-muted); margin: 0 0 8px; }
+.share-panel .share-url { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 4px 6px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-bg); color: var(--color-muted); margin-bottom: 8px; }
+.share-panel button { font: inherit; font-size: 12px; padding: 4px 10px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); cursor: pointer; }
+.share-panel button:hover { color: var(--color-accent); border-color: var(--color-accent); }
 .frame-wrap { flex: 1; min-height: 0; overflow: hidden; background: #fff; }
 #artifact-frame { width: 100%; height: 100%; border: 0; background: #fff; display: block; }
 .sidebar { width: 360px; flex: none; border-left: 1px solid var(--color-border); background: var(--color-surface); display: flex; flex-direction: column; }
@@ -64,7 +74,7 @@ main { flex: 1 1 auto; min-height: 0; max-width: none; width: 100%; margin: 0; p
 @media (max-width: 900px) { .sidebar { width: 300px; } }
 `;
 
-export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document, versions, shownVersion, watching, canDelete }) => {
+export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document, versions, shownVersion, watching, canDelete, isMember, shareUrl }) => {
   const backToUrl =
     shownVersion.id === document.currentVersionId ? `/d/${document.id}` : `/d/${document.id}?version=${shownVersion.number}`;
   // Rendered via dangerouslySetInnerHTML: JSX would entity-escape the JSON,
@@ -100,6 +110,39 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
                 ))}
               </select>
             </label>
+            {isMember ? (
+              <details class="settings-menu share-menu">
+                <summary>{document.visibility === 'public' ? 'Sharing on' : 'Share'}</summary>
+                <div class="settings-menu-items share-panel">
+                  {document.visibility === 'public' ? (
+                    <>
+                      <p>Anyone signed in with the link can view and comment.</p>
+                      <input class="share-url" type="text" readonly value={shareUrl} onfocus="this.select()" />
+                      <form method="post" action={`/d/${document.id}/share`}>
+                        <input type="hidden" name="_csrf" value={csrfToken} />
+                        <input type="hidden" name="visibility" value="team" />
+                        <input type="hidden" name="next" value={backToUrl} />
+                        <button type="submit">Stop sharing</button>
+                      </form>
+                    </>
+                  ) : (
+                    <>
+                      <p>Team only. Sharing lets anyone signed in with the link view and comment.</p>
+                      <form method="post" action={`/d/${document.id}/share`}>
+                        <input type="hidden" name="_csrf" value={csrfToken} />
+                        <input type="hidden" name="visibility" value="public" />
+                        <input type="hidden" name="next" value={backToUrl} />
+                        <button type="submit">Share with anyone signed in</button>
+                      </form>
+                    </>
+                  )}
+                </div>
+              </details>
+            ) : (
+              <span class="shared-note" title="This artifact was shared with you by its team">
+                Shared with you
+              </span>
+            )}
             <form method="post" action={`/d/${document.id}/watch`} class="watch-form">
               <input type="hidden" name="_csrf" value={csrfToken} />
               <input type="hidden" name="watching" value={watching ? 'false' : 'true'} />
@@ -112,7 +155,7 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
                 {watching ? 'Watching ✓' : 'Watch'}
               </button>
             </form>
-            <details class="settings-menu">
+            <details class="settings-menu export-menu">
               <summary>{canDelete ? 'More' : 'Export'}</summary>
               <div class="settings-menu-items">
                 <a href={`/api/docs/${document.id}/export.md`} download={`${document.id}-comments.md`}>

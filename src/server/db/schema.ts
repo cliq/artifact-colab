@@ -165,6 +165,12 @@ export const documents = sqliteTable(
     createdBy: text('created_by')
       .notNull()
       .references(() => users.id),
+    /**
+     * 'team' | 'public'. 'public' widens read/interact access to any signed-in
+     * user who has the URL — the slug is the link secret; the document is
+     * never listed for non-members. Ownership stays with `teamId`.
+     */
+    visibility: text('visibility').notNull().default('team'),
     /** No FK to `versions.id` to avoid a circular reference between the two tables. */
     currentVersionId: text('current_version_id'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),

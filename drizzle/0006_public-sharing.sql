@@ -1,0 +1,1 @@
+ALTER TABLE `documents` ADD `visibility` text DEFAULT 'team' NOT NULL;

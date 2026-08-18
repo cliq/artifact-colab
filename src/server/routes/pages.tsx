@@ -15,7 +15,7 @@ import { getCookie } from 'hono/cookie';
 import { createToken, getSessionUser, revokeToken } from '../auth.js';
 import type { AppEnv } from '../context.js';
 import type { DB } from '../db/index.js';
-import { comments, documents, tokens, users, versions } from '../db/schema.js';
+import { comments, documents, teamMembers, tokens, users, versions, watches, type Document } from '../db/schema.js';
 import { csrfTokenFor, sessionAuth } from '../middleware.js';
 import { gravatarUrl } from '../services/gravatar.js';
 import {
@@ -34,34 +34,59 @@ import { TokensPage, type TokenTeamOption } from '../pages/tokens.js';
 import { safeLocalPath } from '../safeRedirect.js';
 import { appCss } from '../static/appCss.js';
 
+function documentRow(db: DB, doc: Document): DocumentListRow {
+  const [{ value: versionCount }] = db.select({ value: count() }).from(versions).where(eq(versions.documentId, doc.id)).all();
+
+  const [{ value: openCommentCount }] = db
+    .select({ value: count() })
+    .from(comments)
+    .where(and(eq(comments.documentId, doc.id), eq(comments.status, 'open'), isNull(comments.parentId)))
+    .all();
+
+  const [latest] = db
+    .select({ publishedAt: versions.publishedAt })
+    .from(versions)
+    .where(eq(versions.documentId, doc.id))
+    .orderBy(desc(versions.number))
+    .limit(1)
+    .all();
+
+  return {
+    id: doc.id,
+    title: doc.title,
+    versionCount,
+    openCommentCount,
+    lastPublishedAt: latest?.publishedAt ?? null,
+  };
+}
+
 function documentRowsForTeam(db: DB, teamId: string): DocumentListRow[] {
-  const docs = db.select().from(documents).where(eq(documents.teamId, teamId)).orderBy(desc(documents.createdAt)).all();
+  return db
+    .select()
+    .from(documents)
+    .where(eq(documents.teamId, teamId))
+    .orderBy(desc(documents.createdAt))
+    .all()
+    .map((doc) => documentRow(db, doc));
+}
 
-  return docs.map((doc) => {
-    const [{ value: versionCount }] = db.select({ value: count() }).from(versions).where(eq(versions.documentId, doc.id)).all();
-
-    const [{ value: openCommentCount }] = db
-      .select({ value: count() })
-      .from(comments)
-      .where(and(eq(comments.documentId, doc.id), eq(comments.status, 'open'), isNull(comments.parentId)))
-      .all();
-
-    const [latest] = db
-      .select({ publishedAt: versions.publishedAt })
-      .from(versions)
-      .where(eq(versions.documentId, doc.id))
-      .orderBy(desc(versions.number))
-      .limit(1)
-      .all();
-
-    return {
-      id: doc.id,
-      title: doc.title,
-      versionCount,
-      openCommentCount,
-      lastPublishedAt: latest?.publishedAt ?? null,
-    };
-  });
+/**
+ * "Shared with you": public documents outside the user's teams that they hold
+ * a watch row on (interacting auto-watches, so commenting once is enough to
+ * pin a document here; an explicit unwatch only mutes email, it doesn't lose
+ * the link). Flipping a document back to team-only prunes non-member watches,
+ * which removes it from this list too.
+ */
+function sharedWithUserRows(db: DB, userId: string): DocumentListRow[] {
+  return db
+    .select({ document: documents })
+    .from(documents)
+    .innerJoin(watches, and(eq(watches.documentId, documents.id), eq(watches.userId, userId)))
+    .leftJoin(teamMembers, and(eq(teamMembers.teamId, documents.teamId), eq(teamMembers.userId, userId)))
+    .where(and(eq(documents.visibility, 'public'), isNull(teamMembers.userId)))
+    .orderBy(desc(documents.createdAt))
+    .all()
+    .map((row) => documentRow(db, row.document));
 }
 
 export const pageRoutes = new Hono<AppEnv>();
@@ -93,6 +118,7 @@ pageRoutes.get('/', sessionAuth({ redirect: true }), (c) => {
       user={user}
       csrfToken={csrfToken}
       groups={groups}
+      shared={sharedWithUserRows(db, user.id)}
       isInstanceAdmin={isInstanceAdmin(user, config)}
       wizard={wizard}
     />,
@@ -133,6 +159,7 @@ pageRoutes.post('/teams', async (c) => {
         user={user}
         csrfToken={csrfTokenFor(c)}
         groups={[]}
+        shared={sharedWithUserRows(db, user.id)}
         isInstanceAdmin={isInstanceAdmin(user, config)}
         wizard={{ claimableDomain: claimableDomain(db, user.email), error }}
       />,

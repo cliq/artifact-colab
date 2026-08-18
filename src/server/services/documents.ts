@@ -1,14 +1,45 @@
 /**
- * Document lifecycle beyond publishing (which lives in publish.ts): deletion.
- * Shared by the delete_artifact MCP tool, the author/team-admin "Delete
- * artifact" flow, and the instance-admin team cascade in `teams.ts`, so the
- * list of document-scoped children lives in one place.
+ * Document lifecycle beyond publishing (which lives in publish.ts): deletion
+ * and visibility. Shared by the delete_artifact MCP tool, the author/team-admin
+ * "Delete artifact" flow, and the instance-admin team cascade in `teams.ts`, so
+ * the list of document-scoped children lives in one place.
  */
 
-import { inArray } from 'drizzle-orm';
+import { and, eq, inArray, notInArray } from 'drizzle-orm';
 
 import type { DB, DBOrTx } from '../db/index.js';
-import { assets, commentAnchorStates, comments, documents, versions, watches } from '../db/schema.js';
+import { assets, commentAnchorStates, comments, documents, teamMembers, versions, watches, type Document } from '../db/schema.js';
+
+export type DocumentVisibility = 'team' | 'public';
+
+export function isDocumentVisibility(value: unknown): value is DocumentVisibility {
+  return value === 'team' || value === 'public';
+}
+
+/**
+ * The one flip path for a document's visibility (Share menu, publish with an
+ * explicit visibility). Flipping back to 'team' deletes non-members' watch
+ * rows in the same transaction — the digest sweep emails every 'watching' row
+ * without re-checking access, so a revoked outsider's watch would keep mailing
+ * them comments (same invariant as `removeMember`). Pruning also drops the
+ * document from those users' "Shared with you" list.
+ */
+export function setDocumentVisibility(db: DB, document: Document, visibility: DocumentVisibility): void {
+  db.transaction((tx) => {
+    tx.update(documents).set({ visibility }).where(eq(documents.id, document.id)).run();
+    if (visibility === 'team') {
+      const memberIds = tx
+        .select({ userId: teamMembers.userId })
+        .from(teamMembers)
+        .where(eq(teamMembers.teamId, document.teamId))
+        .all()
+        .map((m) => m.userId);
+      tx.delete(watches)
+        .where(and(eq(watches.documentId, document.id), notInArray(watches.userId, memberIds)))
+        .run();
+    }
+  });
+}
 
 /**
  * Deletes documents and everything scoped to them: versions, assets, comments

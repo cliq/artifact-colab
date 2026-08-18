@@ -302,7 +302,7 @@ test.describe('happy path', () => {
     await expect(page.locator('.viewer-toolbar .watch-btn')).toHaveText('Watching ✓');
 
     // Alice authored this document, so the menu also offers deletion.
-    const exportMenu = page.locator('.viewer-toolbar details.settings-menu');
+    const exportMenu = page.locator('.viewer-toolbar details.export-menu');
     await exportMenu.locator('summary').click();
     await expect(exportMenu.locator('.settings-menu-items a')).toHaveText(['Markdown', 'JSON', 'Delete artifact…']);
     await page.locator('main h1').click(); // close the menu again

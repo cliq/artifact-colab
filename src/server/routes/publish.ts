@@ -6,9 +6,9 @@
  * artifacts straight from disk (e.g. via curl) instead of inlining megabytes
  * of HTML or base64 into an MCP tool call. Same caps and behavior as the
  * publish_artifact MCP tool. Fields: title (required), exactly one of html /
- * markdown (file part or text field), document_id (optional), assets
- * (repeated file parts; each part's filename is the reference name used in
- * the HTML, its content-type the mime).
+ * markdown (file part or text field), document_id (optional), visibility
+ * (optional, 'team' | 'public'), assets (repeated file parts; each part's
+ * filename is the reference name used in the HTML, its content-type the mime).
  *
  * GET /api/docs/:slug/raw: the stored source of a version exactly as it was
  * published — HTML, or Markdown for markdown-published versions (no
@@ -23,6 +23,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../context.js';
 import { bearerAuth } from '../middleware.js';
 import type { IncomingAsset } from '../services/assets.js';
+import { isDocumentVisibility } from '../services/documents.js';
 import { publishArtifact } from '../services/publish.js';
 import { findDocumentInTeam, findVersion } from './api.js';
 
@@ -72,6 +73,12 @@ publishRoutes.post('/api/publish', async (c) => {
   }
   const documentId = documentIdField === '' ? undefined : documentIdField;
 
+  const visibilityField = body['visibility'];
+  if (visibilityField !== undefined && visibilityField !== '' && !isDocumentVisibility(visibilityField)) {
+    return c.json({ error: 'visibility must be "team" or "public"' }, 400);
+  }
+  const visibility = visibilityField === '' || visibilityField === undefined ? undefined : visibilityField;
+
   // Repeated fields arrive as arrays under parseBody({ all: true }); a
   // duplicated html/markdown part must fail loudly, not fall through as
   // "absent" and hand the win to the other format.
@@ -104,7 +111,7 @@ publishRoutes.post('/api/publish', async (c) => {
   }
 
   const user = c.get('user');
-  const outcome = publishArtifact(c.get('db'), c.get('config'), user, c.get('tokenTeamId'), { title, html, markdown, documentId, assets });
+  const outcome = publishArtifact(c.get('db'), c.get('config'), user, c.get('tokenTeamId'), { title, html, markdown, documentId, visibility, assets });
   if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
 
   return c.json({

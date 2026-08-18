@@ -15,6 +15,7 @@ import type { DB } from '../db/index.js';
 import { documents, versions, type User } from '../db/schema.js';
 import { findDocumentInTeam } from '../routes/api.js';
 import { recomputeForVersion } from './anchorStates.js';
+import { setDocumentVisibility, type DocumentVisibility } from './documents.js';
 import { renderMarkdownArtifact } from './markdown.js';
 import { autoWatch } from './watches.js';
 import {
@@ -49,6 +50,8 @@ export interface PublishInput {
   markdown?: string;
   documentId?: string;
   assets?: IncomingAsset[];
+  /** Sets it on create (default 'team'); on republish, updates it when given, keeps the current value when omitted. */
+  visibility?: DocumentVisibility;
 }
 
 export type PublishOutcome =
@@ -97,11 +100,15 @@ export function publishArtifact(db: DB, config: Config, user: User, teamId: stri
       .reduce((max, v) => Math.max(max, v.number), 0);
     versionNumber = latest + 1;
     db.update(documents).set({ title }).where(eq(documents.id, docId)).run();
+    if (input.visibility !== undefined && input.visibility !== doc.visibility) {
+      // Through the shared flip path: reverting to team-only must prune outsiders' watches.
+      setDocumentVisibility(db, doc, input.visibility);
+    }
   } else {
     docId = slug();
     versionNumber = 1;
     db.insert(documents)
-      .values({ id: docId, title, teamId, createdBy: user.id, currentVersionId: null, createdAt: now })
+      .values({ id: docId, title, teamId, createdBy: user.id, visibility: input.visibility ?? 'team', currentVersionId: null, createdAt: now })
       .run();
   }
 

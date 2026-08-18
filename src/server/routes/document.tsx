@@ -15,10 +15,10 @@ import { comments, versions, type Document } from '../db/schema.js';
 import { csrfTokenFor } from '../middleware.js';
 import { DocumentDeletePage, DocumentPage } from '../pages/document.js';
 import { safeLocalPath } from '../safeRedirect.js';
-import { deleteDocumentCascade } from '../services/documents.js';
+import { deleteDocumentCascade, isDocumentVisibility, setDocumentVisibility } from '../services/documents.js';
 import { isTeamAdmin } from '../services/teams.js';
 import { isWatching, setWatching } from '../services/watches.js';
-import { findDocumentForUser } from './api.js';
+import { findDocumentForUser, findDocumentForViewer } from './api.js';
 
 let viewerJsCache: string | null = null;
 
@@ -40,7 +40,12 @@ export function resetViewerCache(): void {
 
 export const documentRoutes = new Hono<AppEnv>();
 
-/** True when the signed-in user may delete this document: its author, or an admin of its team. */
+/**
+ * True when the signed-in user may delete this document: its author, or an
+ * admin of its team. Callers must already have established membership
+ * (`findDocumentForUser`) — a public document's creator who left the team is a
+ * guest, not an owner.
+ */
 export function canDeleteDocument(c: Context<AppEnv>, doc: Document): boolean {
   const user = c.get('user');
   return doc.createdBy === user.id || isTeamAdmin(c.get('db'), doc.teamId, user.id);
@@ -63,10 +68,12 @@ documentRoutes.get('/static/viewer.js', (c) =>
 documentRoutes.get('/d/:slug', (c) => {
   const user = c.get('user');
   const db = c.get('db');
+  const config = c.get('config');
   const slug = c.req.param('slug');
 
-  const doc = findDocumentForUser(db, slug, user.id);
-  if (!doc) return c.notFound();
+  const access = findDocumentForViewer(db, slug, user.id);
+  if (!access) return c.notFound();
+  const doc = access.document;
 
   const versionRows = db
     .select({ id: versions.id, number: versions.number, publishedAt: versions.publishedAt })
@@ -94,9 +101,33 @@ documentRoutes.get('/d/:slug', (c) => {
       versions={versionRows}
       shownVersion={shown}
       watching={isWatching(db, doc.id, user.id)}
-      canDelete={canDeleteDocument(c, doc)}
+      canDelete={access.isMember && canDeleteDocument(c, doc)}
+      isMember={access.isMember}
+      shareUrl={`${config.baseUrl}/d/${doc.id}`}
     />,
   );
+});
+
+// Any member may toggle sharing (consistent with the flat publish/comment
+// model); non-members 404 like every other member-gated action.
+documentRoutes.post('/d/:slug/share', async (c) => {
+  const user = c.get('user');
+  const db = c.get('db');
+
+  // Body first, membership second: the DB is synchronous, so checking after
+  // the last await keeps check-and-act atomic — a member removed while the
+  // form body streams in can't resume and expose team content.
+  const body = await c.req.parseBody();
+
+  const doc = findDocumentForUser(db, c.req.param('slug'), user.id);
+  if (!doc) return c.notFound();
+
+  const visibility = body['visibility'];
+  if (!isDocumentVisibility(visibility)) return c.text('visibility must be "team" or "public"', 400);
+  setDocumentVisibility(db, doc, visibility);
+
+  const requested = typeof body['next'] === 'string' ? body['next'] : undefined;
+  return c.redirect(safeLocalPath(requested) ?? `/d/${doc.id}`, 302);
 });
 
 documentRoutes.get('/d/:slug/delete', (c) => {
@@ -128,10 +159,12 @@ documentRoutes.post('/d/:slug/watch', async (c) => {
   const db = c.get('db');
   const slug = c.req.param('slug');
 
-  const doc = findDocumentForUser(db, slug, user.id);
+  // Body first, access second — same revocation-race guard as the share route.
+  const body = await c.req.parseBody();
+
+  const doc = findDocumentForViewer(db, slug, user.id)?.document;
   if (!doc) return c.notFound();
 
-  const body = await c.req.parseBody();
   setWatching(db, doc.id, user.id, body['watching'] === 'true', new Date());
 
   const requested = typeof body['next'] === 'string' ? body['next'] : undefined;

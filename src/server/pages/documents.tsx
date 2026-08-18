@@ -36,6 +36,8 @@ export interface DocumentsPageProps {
   user: User;
   csrfToken: string;
   groups: TeamDocumentsGroup[];
+  /** Public documents outside the user's teams that they interacted with (see `sharedWithUserRows`). */
+  shared: DocumentListRow[];
   isInstanceAdmin: boolean;
   wizard?: TeamWizardProps;
 }
@@ -102,7 +104,17 @@ const TeamWizard: FC<{ csrfToken: string; wizard: TeamWizardProps }> = ({ csrfTo
   </form>
 );
 
-export const DocumentsPage: FC<DocumentsPageProps> = ({ user, csrfToken, groups, isInstanceAdmin, wizard }) => {
+/** Public documents from other teams the user interacted with; shown after their own teams' groups. */
+const SharedSection: FC<{ documents: DocumentListRow[] }> = ({ documents }) => (
+  <section class="team-group">
+    <div class="page-title-row">
+      <h2>Shared with you</h2>
+    </div>
+    <DocumentsTable documents={documents} />
+  </section>
+);
+
+export const DocumentsPage: FC<DocumentsPageProps> = ({ user, csrfToken, groups, shared, isInstanceAdmin, wizard }) => {
   return (
     <Layout title="Documents - Artifact Colab" user={user} csrfToken={csrfToken} isInstanceAdmin={isInstanceAdmin}>
       {groups.length === 0 ? (
@@ -124,6 +136,7 @@ export const DocumentsPage: FC<DocumentsPageProps> = ({ user, csrfToken, groups,
               </p>
             </div>
           )}
+          {shared.length > 0 && <SharedSection documents={shared} />}
         </>
       ) : groups.length === 1 ? (
         <>
@@ -136,6 +149,7 @@ export const DocumentsPage: FC<DocumentsPageProps> = ({ user, csrfToken, groups,
             )}
           </div>
           {groups[0]!.documents.length === 0 ? <EmptyTeamNote /> : <DocumentsTable documents={groups[0]!.documents} />}
+          {shared.length > 0 && <SharedSection documents={shared} />}
         </>
       ) : (
         <>
@@ -153,6 +167,7 @@ export const DocumentsPage: FC<DocumentsPageProps> = ({ user, csrfToken, groups,
               {group.documents.length === 0 ? <EmptyTeamNote /> : <DocumentsTable documents={group.documents} />}
             </section>
           ))}
+          {shared.length > 0 && <SharedSection documents={shared} />}
         </>
       )}
     </Layout>

@@ -1,13 +1,13 @@
 /**
- * Documents/comments REST API. Every document lookup is scoped to the
- * requesting user's team memberships in the query itself — a document
- * belonging to a team the user isn't in is indistinguishable from a document
- * that doesn't exist, so it 404s rather than 403s.
+ * Documents/comments REST API. Every document lookup is scoped in the query
+ * itself — team membership, widened to any signed-in user for documents with
+ * visibility 'public'. A document the requester can't see is indistinguishable
+ * from a document that doesn't exist, so it 404s rather than 403s.
  */
 
 import { randomBytes } from 'node:crypto';
 
-import { and, asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull, or } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -56,6 +56,28 @@ export function findDocumentForUser(db: DB, slug: string, userId: string): Docum
   return row?.document;
 }
 
+export interface ViewerDocument {
+  document: Document;
+  /** False for a signed-in user reaching a public document from outside its team. */
+  isMember: boolean;
+}
+
+/**
+ * Read/interact access: team members always, any signed-in user when the
+ * document is public. Non-matches stay indistinguishable from nonexistent
+ * documents (404), including public documents flipped back to team-only.
+ * Member-gated actions (delete, share toggle) use `findDocumentForUser`.
+ */
+export function findDocumentForViewer(db: DB, slug: string, userId: string): ViewerDocument | undefined {
+  const row = db
+    .select({ document: documents, memberId: teamMembers.userId })
+    .from(documents)
+    .leftJoin(teamMembers, and(eq(teamMembers.teamId, documents.teamId), eq(teamMembers.userId, userId)))
+    .where(and(eq(documents.id, slug), or(isNotNull(teamMembers.userId), eq(documents.visibility, 'public'))))
+    .get();
+  return row ? { document: row.document, isMember: row.memberId !== null } : undefined;
+}
+
 /** The document, if it belongs to the given team — the scope check for bearer-token (team-scoped) access. */
 export function findDocumentInTeam(db: DB, slug: string, teamId: string): Document | undefined {
   return db.select().from(documents).where(and(eq(documents.id, slug), eq(documents.teamId, teamId))).get();
@@ -81,12 +103,19 @@ export interface AuthorDTO {
   /** Profile display name; null until the user sets one — clients fall back to the email. */
   name: string | null;
   avatarUrl: string;
+  /** True when the author is not (or no longer) a member of the document's team — a public-doc guest. */
+  isGuest: boolean;
 }
 
-function authorFor(db: DB, userId: string): AuthorDTO {
+function authorFor(db: DB, userId: string, teamId: string): AuthorDTO {
   const row = db.select().from(users).where(eq(users.id, userId)).get();
   const email = row?.email ?? '';
-  return { email, name: row?.name ?? null, avatarUrl: gravatarUrl(email) };
+  const member = db
+    .select({ userId: teamMembers.userId })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, userId)))
+    .get();
+  return { email, name: row?.name ?? null, avatarUrl: gravatarUrl(email), isGuest: member === undefined };
 }
 
 function parseAnchorJson(raw: string): unknown {
@@ -126,7 +155,7 @@ export interface ThreadDTO {
 }
 
 /** Build the full thread DTO for a top-level comment, including its anchor state for `versionId`. */
-export function buildThread(db: DB, comment: Comment, versionId: string | undefined): ThreadDTO {
+export function buildThread(db: DB, comment: Comment, versionId: string | undefined, teamId: string): ThreadDTO {
   const anchorStateRow = versionId
     ? db
         .select()
@@ -143,7 +172,7 @@ export function buildThread(db: DB, comment: Comment, versionId: string | undefi
     quotedText: comment.quotedText,
     anchor: parseAnchorJson(comment.anchor),
     status: comment.status,
-    author: authorFor(db, comment.authorId),
+    author: authorFor(db, comment.authorId, teamId),
     createdAt: comment.createdAt,
     createdVersionId: comment.createdVersionId,
     resolvedAt: comment.resolvedAt,
@@ -154,7 +183,7 @@ export function buildThread(db: DB, comment: Comment, versionId: string | undefi
     replies: replyRows.map((reply) => ({
       id: reply.id,
       body: reply.body,
-      author: authorFor(db, reply.authorId),
+      author: authorFor(db, reply.authorId, teamId),
       createdAt: reply.createdAt,
     })),
   };
@@ -174,7 +203,7 @@ export function topLevelCommentsFor(db: DB, documentId: string): Comment[] {
     .all();
 }
 
-/** A top-level comment on a document the user can access, or undefined. */
+/** A top-level comment on a document the user can access (viewer access — public docs included), or undefined. */
 export function findOwnedTopLevelComment(
   db: DB,
   commentId: string,
@@ -185,7 +214,7 @@ export function findOwnedTopLevelComment(
 
   const document =
     'userId' in access
-      ? findDocumentForUser(db, comment.documentId, access.userId)
+      ? findDocumentForViewer(db, comment.documentId, access.userId)?.document
       : findDocumentInTeam(db, comment.documentId, access.teamId);
   if (!document) return undefined;
 
@@ -197,7 +226,7 @@ export const apiRoutes = new Hono<AppEnv>();
 apiRoutes.get('/api/docs/:slug', (c) => {
   const db = c.get('db');
   const user = c.get('user');
-  const doc = findDocumentForUser(db, c.req.param('slug'), user.id);
+  const doc = findDocumentForViewer(db, c.req.param('slug'), user.id)?.document;
   if (!doc) return c.json({ error: 'not found' }, 404);
 
   const versionRows = db.select().from(versions).where(eq(versions.documentId, doc.id)).orderBy(asc(versions.number)).all();
@@ -207,6 +236,7 @@ apiRoutes.get('/api/docs/:slug', (c) => {
       id: doc.id,
       title: doc.title,
       teamId: doc.teamId,
+      visibility: doc.visibility,
       createdAt: doc.createdAt,
       currentVersionId: doc.currentVersionId,
     },
@@ -217,11 +247,11 @@ apiRoutes.get('/api/docs/:slug', (c) => {
 apiRoutes.get('/api/docs/:slug/comments', (c) => {
   const db = c.get('db');
   const user = c.get('user');
-  const doc = findDocumentForUser(db, c.req.param('slug'), user.id);
+  const doc = findDocumentForViewer(db, c.req.param('slug'), user.id)?.document;
   if (!doc) return c.json({ error: 'not found' }, 404);
 
   const versionId = c.req.query('version') ?? doc.currentVersionId ?? undefined;
-  const threads = sortTopLevel(topLevelCommentsFor(db, doc.id)).map((row) => buildThread(db, row, versionId));
+  const threads = sortTopLevel(topLevelCommentsFor(db, doc.id)).map((row) => buildThread(db, row, versionId, doc.teamId));
 
   return c.json({ comments: threads });
 });
@@ -229,10 +259,14 @@ apiRoutes.get('/api/docs/:slug/comments', (c) => {
 apiRoutes.post('/api/docs/:slug/comments', async (c) => {
   const db = c.get('db');
   const user = c.get('user');
-  const doc = findDocumentForUser(db, c.req.param('slug'), user.id);
-  if (!doc) return c.json({ error: 'not found' }, 404);
 
+  // Body first, access second: the DB is synchronous, so checking after the
+  // last await keeps check-and-act atomic — a revoke landing while the body
+  // streams in can't resurrect access (or the outsider's watch via autoWatch).
   const parsed = createCommentSchema.safeParse(await readJson(c));
+
+  const doc = findDocumentForViewer(db, c.req.param('slug'), user.id)?.document;
+  if (!doc) return c.json({ error: 'not found' }, 404);
   if (!parsed.success) return c.json({ error: 'invalid comment' }, 400);
 
   const version = db
@@ -274,7 +308,7 @@ apiRoutes.post('/api/docs/:slug/comments', async (c) => {
   const created = db.select().from(comments).where(eq(comments.id, id)).get();
   if (!created) return c.json({ error: 'internal error' }, 500);
 
-  return c.json(buildThread(db, created, version.id), 201);
+  return c.json(buildThread(db, created, version.id, doc.teamId), 201);
 });
 
 apiRoutes.post('/api/comments/:id/replies', async (c) => {
@@ -282,13 +316,15 @@ apiRoutes.post('/api/comments/:id/replies', async (c) => {
   const user = c.get('user');
   const parentId = c.req.param('id');
 
+  // Body first, access second — same revocation-race guard as comment create.
+  const parsed = replySchema.safeParse(await readJson(c));
+
   const parent = db.select().from(comments).where(eq(comments.id, parentId)).get();
   if (!parent || parent.parentId !== null) return c.json({ error: 'not found' }, 404);
 
-  const doc = findDocumentForUser(db, parent.documentId, user.id);
+  const doc = findDocumentForViewer(db, parent.documentId, user.id)?.document;
   if (!doc) return c.json({ error: 'not found' }, 404);
 
-  const parsed = replySchema.safeParse(await readJson(c));
   if (!parsed.success) return c.json({ error: 'invalid reply' }, 400);
 
   const id = randomBytes(8).toString('hex');
@@ -313,7 +349,7 @@ apiRoutes.post('/api/comments/:id/replies', async (c) => {
 
   autoWatch(db, parent.documentId, user.id, now);
 
-  return c.json({ id, body: parsed.data.body, author: authorFor(db, user.id), createdAt: now }, 201);
+  return c.json({ id, body: parsed.data.body, author: authorFor(db, user.id, doc.teamId), createdAt: now }, 201);
 });
 
 apiRoutes.post('/api/comments/:id/resolve', (c) => {
@@ -331,7 +367,7 @@ apiRoutes.post('/api/comments/:id/resolve', (c) => {
   const updated = db.select().from(comments).where(eq(comments.id, found.comment.id)).get();
   if (!updated) return c.json({ error: 'internal error' }, 500);
 
-  return c.json(buildThread(db, updated, found.document.currentVersionId ?? undefined));
+  return c.json(buildThread(db, updated, found.document.currentVersionId ?? undefined, found.document.teamId));
 });
 
 apiRoutes.post('/api/comments/:id/reopen', (c) => {
@@ -345,7 +381,7 @@ apiRoutes.post('/api/comments/:id/reopen', (c) => {
   const updated = db.select().from(comments).where(eq(comments.id, found.comment.id)).get();
   if (!updated) return c.json({ error: 'internal error' }, 500);
 
-  return c.json(buildThread(db, updated, found.document.currentVersionId ?? undefined));
+  return c.json(buildThread(db, updated, found.document.currentVersionId ?? undefined, found.document.teamId));
 });
 
 /**
@@ -373,11 +409,11 @@ apiRoutes.get('/api/docs/:slug/export.json', (c) => {
   const db = c.get('db');
   const user = c.get('user');
   const config = c.get('config');
-  const doc = findDocumentForUser(db, c.req.param('slug'), user.id);
+  const doc = findDocumentForViewer(db, c.req.param('slug'), user.id)?.document;
   if (!doc) return c.json({ error: 'not found' }, 404);
 
   const versionId = doc.currentVersionId ?? undefined;
-  const threads = sortTopLevel(topLevelCommentsFor(db, doc.id)).map((row) => buildThread(db, row, versionId));
+  const threads = sortTopLevel(topLevelCommentsFor(db, doc.id)).map((row) => buildThread(db, row, versionId, doc.teamId));
   const ctx = exportContext(db, config.baseUrl, doc);
 
   return c.json({
@@ -397,11 +433,11 @@ apiRoutes.get('/api/docs/:slug/export.md', (c) => {
   const db = c.get('db');
   const user = c.get('user');
   const config = c.get('config');
-  const doc = findDocumentForUser(db, c.req.param('slug'), user.id);
+  const doc = findDocumentForViewer(db, c.req.param('slug'), user.id)?.document;
   if (!doc) return c.json({ error: 'not found' }, 404);
 
   const versionId = doc.currentVersionId ?? undefined;
-  const threads = sortTopLevel(topLevelCommentsFor(db, doc.id)).map((row) => buildThread(db, row, versionId));
+  const threads = sortTopLevel(topLevelCommentsFor(db, doc.id)).map((row) => buildThread(db, row, versionId, doc.teamId));
   const open = threads.filter((thread) => thread.status !== 'resolved');
   const resolved = threads.filter((thread) => thread.status === 'resolved');
 

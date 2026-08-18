@@ -124,6 +124,7 @@ describe('profile & avatars', () => {
       email: 'alice@example.com',
       name: 'Alice Cooper',
       avatarUrl: gravatarUrl('alice@example.com'),
+      isGuest: false,
     });
   });
 

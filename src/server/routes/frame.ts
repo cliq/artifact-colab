@@ -17,7 +17,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../context.js';
 import { versions } from '../db/schema.js';
 import { assetsForDocument, inlineAssets } from '../services/assets.js';
-import { findDocumentForUser } from './api.js';
+import { findDocumentForViewer } from './api.js';
 
 let annotatorJsCache: string | null = null;
 
@@ -66,7 +66,7 @@ frameRoutes.get('/d/:slug/frame', (c) => {
   const config = c.get('config');
   const slug = c.req.param('slug');
 
-  const doc = findDocumentForUser(db, slug, user.id);
+  const doc = findDocumentForViewer(db, slug, user.id)?.document;
   if (!doc) return c.notFound();
 
   const versionParam = c.req.query('version');

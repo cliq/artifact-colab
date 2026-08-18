@@ -56,7 +56,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, teamId: st
         'For files too large to inline in a tool call, publish from disk instead — POST multipart/form-data to ' +
         `${config.baseUrl}/api/publish with the same bearer token: curl -X POST ${config.baseUrl}/api/publish ` +
         '-H "Authorization: Bearer $TOKEN" -F title="..." -F html=@page.html -F "assets=@bar.png;filename=shots/bar.png" ' +
-        '(pass -F markdown=@page.md instead of the html part to publish Markdown; document_id is an optional form field; ' +
+        '(pass -F markdown=@page.md instead of the html part to publish Markdown; document_id and visibility are optional form fields; ' +
         'each asset filename is its reference name; $TOKEN is the same token ' +
         'this MCP server is configured with, e.g. in the Authorization header of its entry in your MCP config).',
       inputSchema: z.object({
@@ -64,6 +64,12 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, teamId: st
         html: z.string().min(1).optional().describe('Complete HTML for the artifact (max 5 MB); exactly one of html/markdown'),
         markdown: z.string().min(1).optional().describe('Markdown (GFM) source (max 5 MB); exactly one of html/markdown'),
         document_id: z.string().optional().describe('Existing document ID to publish a new version of'),
+        visibility: z
+          .enum(['team', 'public'])
+          .optional()
+          .describe(
+            "Who can open the URL: 'team' (members only, the default for new documents) or 'public' (anyone signed in on the instance who has the link). Omitted on a republish keeps the document's current setting",
+          ),
         assets: z
           .array(
             z.object({
@@ -76,7 +82,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, teamId: st
           .describe('Files referenced by the HTML; re-uploading a name replaces it for the whole document'),
       }),
     },
-    async ({ title, html, markdown, document_id, assets: incomingAssets }) => {
+    async ({ title, html, markdown, document_id, visibility, assets: incomingAssets }) => {
       const decodedAssets: IncomingAsset[] = [];
       for (const a of incomingAssets ?? []) {
         const data = Buffer.from(a.data_base64, 'base64');
@@ -84,13 +90,23 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, teamId: st
         decodedAssets.push({ name: a.name, mime: a.mime_type, data });
       }
 
-      const outcome = publishArtifact(db, config, user, teamId, { title, html, markdown, documentId: document_id, assets: decodedAssets });
+      const outcome = publishArtifact(db, config, user, teamId, {
+        title,
+        html,
+        markdown,
+        documentId: document_id,
+        visibility,
+        assets: decodedAssets,
+      });
       if (!outcome.ok) return toolError(outcome.error);
 
       const lines = [
         `Published "${title}" as version ${outcome.versionNumber}: ${outcome.url}`,
         `document_id: ${outcome.documentId}`,
       ];
+      if (visibility === 'public') {
+        lines.push('The URL is shareable with anyone signed in on this instance.');
+      }
       if (outcome.orphaned > 0) {
         const n = outcome.orphaned;
         lines.push(`${n} previously-anchored comment${n === 1 ? '' : 's'} no longer match and ${n === 1 ? 'is' : 'are'} orphaned.`);
@@ -135,6 +151,9 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, teamId: st
       const source = row.sourceMarkdown ?? row.html;
       const assetNames = assetsForDocument(db, doc.id).map((a) => a.name);
       const headerLines = [`"${doc.title}" — version ${row.number} of ${doc.id}${isMarkdown ? ' (published as Markdown)' : ''}`];
+      if (doc.visibility === 'public') {
+        headerLines.push('Visibility: public (anyone signed in on the instance can open the URL).');
+      }
       if (assetNames.length > 0) {
         headerLines.push(`Referenced assets (stored separately, substituted when rendering): ${assetNames.join(', ')}`);
       }
@@ -176,7 +195,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, teamId: st
       if (!doc) return toolError(`unknown document_id: ${document_id}`);
       let topLevel = sortTopLevel(topLevelCommentsFor(db, doc.id));
       if (status) topLevel = topLevel.filter((c) => c.status === status);
-      const threads = topLevel.map((c) => buildThread(db, c, doc.currentVersionId ?? undefined));
+      const threads = topLevel.map((c) => buildThread(db, c, doc.currentVersionId ?? undefined, doc.teamId));
       const ctx = exportContext(db, config.baseUrl, doc);
       const payload = {
         document: {
