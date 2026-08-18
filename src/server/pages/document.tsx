@@ -107,7 +107,7 @@ const shareOptions = [
     value: 'public',
     name: 'Anyone with the link',
     hint: 'Anyone signed in with the link can view and comment.',
-    summary: 'Sharing on',
+    summary: 'Public',
     note: 'Anyone signed in can open this link.',
   },
 ] as const;

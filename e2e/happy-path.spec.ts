@@ -323,7 +323,7 @@ test.describe('happy path', () => {
     await expect(options.nth(2)).toHaveAttribute('aria-checked', 'true');
     await expect(options.nth(1)).toHaveAttribute('aria-checked', 'false');
     await expect(shareMenu.locator('.share-link-note')).toHaveText('Anyone signed in can open this link.');
-    await expect(shareMenu.locator('summary')).toHaveText('Sharing on');
+    await expect(shareMenu.locator('summary')).toHaveText('Public');
     await expect(shareMenu).toHaveAttribute('open', '');
 
     // The change really persisted server-side.
