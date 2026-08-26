@@ -304,7 +304,7 @@ test.describe('happy path', () => {
     // Alice authored this document, so the menu also offers deletion.
     const exportMenu = page.locator('.viewer-toolbar details.export-menu');
     await exportMenu.locator('summary').click();
-    await expect(exportMenu.locator('.settings-menu-items a')).toHaveText(['Markdown', 'JSON', 'Delete artifact…']);
+    await expect(exportMenu.locator('.settings-menu-items a')).toHaveText(['Export comments as Markdown…', 'Export comments as JSON…', 'Export artifact…', 'Delete artifact…']);
     await page.locator('main h1').click(); // close the menu again
   });
 

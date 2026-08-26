@@ -74,3 +74,30 @@ export function inlineAssets(html: string, docAssets: Asset[]): string {
   }
   return out;
 }
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Point references to uploaded assets at files under `assets/` instead of
+ * inlining them — used by the zip export, where the images ship next to
+ * `index.html` / `source.md`. Covers src="name", src='name', CSS url(name)
+ * in any quoting, and Markdown `](name)` links.
+ *
+ * All names are matched in one pass so a rewrite never feeds a later one:
+ * with both `logo.png` and `assets/logo.png` uploaded, `logo.png` must not
+ * end up as `assets/assets/logo.png`.
+ */
+export function relinkAssets(source: string, docAssets: Asset[]): string {
+  if (docAssets.length === 0) return source;
+  const names = [...new Set(docAssets.map((a) => a.name))].sort((a, b) => b.length - a.length).map(escapeRegExp).join('|');
+  const pattern = new RegExp(`(src=|url\\(|\\]\\()(["']?)(${names})(\\2)(?=[)>/\\s]|$)`, 'g');
+  return source.replace(pattern, (_m, prefix: string, quote: string, name: string) => `${prefix}${quote}assets/${name}${quote}`);
+}
+
+/**
+ * Drop `<base href>` so the relative `assets/...` links in an exported
+ * `index.html` resolve next to the file instead of against a remote origin.
+ */
+export function stripBaseHref(html: string): string {
+  return html.replace(/<base\b[^>]*>/gi, '');
+}

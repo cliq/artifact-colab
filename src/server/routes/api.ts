@@ -16,7 +16,9 @@ import type { AppEnv } from '../context.js';
 import type { DB } from '../db/index.js';
 import { comments, commentAnchorStates, documents, teamMembers, users, versions, type Comment, type Document, type Version } from '../db/schema.js';
 import { computeForComment, computeForCommentVersion } from '../services/anchorStates.js';
+import { assetsForDocument, relinkAssets, stripBaseHref } from '../services/assets.js';
 import { gravatarUrl } from '../services/gravatar.js';
+import { buildZip, type ZipEntry } from '../services/zip.js';
 import { autoWatch } from '../services/watches.js';
 
 const anchorSchema = z.object({
@@ -461,19 +463,14 @@ apiRoutes.get('/api/docs/:slug/export.json', (c) => {
   });
 });
 
-apiRoutes.get('/api/docs/:slug/export.md', (c) => {
-  const db = c.get('db');
-  const user = c.get('user');
-  const config = c.get('config');
-  const doc = findDocumentForViewer(db, c.req.param('slug'), user.id)?.document;
-  if (!doc) return c.json({ error: 'not found' }, 404);
-
+/** The Markdown rendering of a document's comment threads, shared by export.md and the zip export. */
+function commentsMarkdown(db: DB, baseUrl: string, doc: Document): string {
   const versionId = doc.currentVersionId ?? undefined;
   const threads = sortTopLevel(topLevelCommentsFor(db, doc.id)).map((row) => buildThread(db, row, versionId, doc.teamId));
   const open = threads.filter((thread) => thread.status !== 'resolved');
   const resolved = threads.filter((thread) => thread.status === 'resolved');
 
-  const ctx = exportContext(db, config.baseUrl, doc);
+  const ctx = exportContext(db, baseUrl, doc);
   const lines: string[] = [
     `# Comments on ${doc.title}`,
     '',
@@ -494,6 +491,53 @@ apiRoutes.get('/api/docs/:slug/export.md', (c) => {
   };
   renderSection('Open', open);
   renderSection('Resolved', resolved);
+  return lines.join('\n');
+}
 
-  return c.text(lines.join('\n'), 200, { 'Content-Type': 'text/markdown; charset=utf-8' });
+apiRoutes.get('/api/docs/:slug/export.md', (c) => {
+  const db = c.get('db');
+  const user = c.get('user');
+  const config = c.get('config');
+  const doc = findDocumentForViewer(db, c.req.param('slug'), user.id)?.document;
+  if (!doc) return c.json({ error: 'not found' }, 404);
+  return c.text(commentsMarkdown(db, config.baseUrl, doc), 200, { 'Content-Type': 'text/markdown; charset=utf-8' });
+});
+
+/** File-name-safe slug of a title; falls back to the document id when nothing survives. */
+export function titleSlug(title: string, fallback: string): string {
+  const slug = title
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+  return slug || fallback;
+}
+
+/**
+ * Whole-artifact download: the current version as `index.html` (plus
+ * `source.md` when it was published as Markdown), uploaded assets under
+ * `assets/`, and the comment threads as `comments.md`.
+ */
+apiRoutes.get('/api/docs/:slug/export.zip', (c) => {
+  const db = c.get('db');
+  const user = c.get('user');
+  const config = c.get('config');
+  const doc = findDocumentForViewer(db, c.req.param('slug'), user.id)?.document;
+  if (!doc) return c.json({ error: 'not found' }, 404);
+  const version = doc.currentVersionId ? db.select().from(versions).where(eq(versions.id, doc.currentVersionId)).get() : undefined;
+  if (!version) return c.json({ error: 'not found' }, 404);
+
+  const docAssets = assetsForDocument(db, doc.id);
+  const entries: ZipEntry[] = [{ name: 'index.html', data: relinkAssets(stripBaseHref(version.html), docAssets) }];
+  if (version.sourceMarkdown !== null) entries.push({ name: 'source.md', data: relinkAssets(version.sourceMarkdown, docAssets) });
+  for (const asset of docAssets) entries.push({ name: `assets/${asset.name}`, data: asset.data });
+  entries.push({ name: 'comments.md', data: commentsMarkdown(db, config.baseUrl, doc) });
+
+  const filename = `${titleSlug(doc.title, doc.id)}.zip`;
+  return c.body(new Uint8Array(buildZip(entries)), 200, {
+    'Content-Type': 'application/zip',
+    'Content-Disposition': `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+  });
 });

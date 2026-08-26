@@ -210,10 +210,13 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
               <summary>{canDelete ? 'More' : 'Export'}</summary>
               <div class="settings-menu-items">
                 <a href={`/api/docs/${document.id}/export.md`} download={`${document.id}-comments.md`}>
-                  Markdown
+                  Export comments as Markdown…
                 </a>
                 <a href={`/api/docs/${document.id}/export.json`} download={`${document.id}-comments.json`}>
-                  JSON
+                  Export comments as JSON…
+                </a>
+                <a href={`/api/docs/${document.id}/export.zip`} download>
+                  Export artifact…
                 </a>
                 {canDelete && (
                   <a class="danger-link" href={`/d/${document.id}/delete`}>

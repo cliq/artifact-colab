@@ -10,7 +10,8 @@
  * deliberately without `csrfProtect` (orthogonal to this router).
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -22,7 +23,7 @@ import { describeTextAnchor } from '../../src/anchoring/text.js';
 import { createSession, getOrCreateUser } from '../../src/server/auth.js';
 import type { Config } from '../../src/server/config.js';
 import type { AppEnv } from '../../src/server/context.js';
-import { documents, openDb, versions, type DB } from '../../src/server/db/index.js';
+import { assets, documents, openDb, versions, type DB } from '../../src/server/db/index.js';
 import { sessionAuth } from '../../src/server/middleware.js';
 import { apiRoutes } from '../../src/server/routes/api.js';
 import { indexVersionHtml, recomputeForVersion } from '../../src/server/services/anchorStates.js';
@@ -247,6 +248,40 @@ describe('api', () => {
       const text = await res.text();
       expect(text).toContain('# Comments on Quarterly Report');
       expect(text).toContain(QUOTE);
+    });
+
+    test('export.zip bundles index.html, relinked assets and comments.md under a title-slug file name', async () => {
+      db.insert(assets)
+        .values({ id: 'asset-1', documentId: slug, name: 'chart.png', mime: 'image/png', data: Buffer.from('PNGDATA'), createdAt: new Date() })
+        .run();
+      db.update(versions)
+        .set({ html: `<base href="https://cdn.example/"><img src="chart.png">${V1_HTML}`, sourceMarkdown: `![chart](chart.png)\n\n${QUOTE}` })
+        .where(eq(versions.id, v1Id))
+        .run();
+      try {
+        const res = await app.request(`/api/docs/${slug}/export.zip`, { headers: { cookie: ownerCookie } });
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-type')).toBe('application/zip');
+        expect(res.headers.get('content-disposition')).toContain('filename="quarterly-report.zip"');
+
+        const dir = mkdtempSync(join(tmpdir(), 'export-zip-'));
+        try {
+          writeFileSync(join(dir, 'a.zip'), Buffer.from(await res.arrayBuffer()));
+          execFileSync('unzip', ['-q', 'a.zip', '-d', 'out'], { cwd: dir });
+          expect(readdirSync(join(dir, 'out')).sort()).toEqual(['assets', 'comments.md', 'index.html', 'source.md']);
+          const index = readFileSync(join(dir, 'out/index.html'), 'utf8');
+          expect(index).toContain('<img src="assets/chart.png">');
+          expect(index).not.toContain('<base');
+          expect(readFileSync(join(dir, 'out/source.md'), 'utf8')).toContain('![chart](assets/chart.png)');
+          expect(readFileSync(join(dir, 'out/assets/chart.png'), 'utf8')).toBe('PNGDATA');
+          expect(readFileSync(join(dir, 'out/comments.md'), 'utf8')).toContain(QUOTE);
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      } finally {
+        db.delete(assets).where(eq(assets.documentId, slug)).run();
+        db.update(versions).set({ html: V1_HTML, sourceMarkdown: null }).where(eq(versions.id, v1Id)).run();
+      }
     });
   });
 
