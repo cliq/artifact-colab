@@ -31,7 +31,7 @@ function randomToken(): string {
 export class AnnotatorBridge {
   private readonly token = randomToken();
   private ready = false;
-  private pendingAnchors: AnnotatorAnchorInput[] | null = null;
+  private pendingAnchors: { anchors: AnnotatorAnchorInput[]; showResolved: boolean } | null = null;
 
   constructor(
     private readonly iframe: HTMLIFrameElement,
@@ -61,7 +61,7 @@ export class AnnotatorBridge {
       case 'ready':
         this.ready = true;
         if (this.pendingAnchors) {
-          this.post({ token: this.token, type: 'anchors', anchors: this.pendingAnchors });
+          this.post({ token: this.token, type: 'anchors', ...this.pendingAnchors });
           this.pendingAnchors = null;
         }
         this.callbacks.onReady?.();
@@ -88,12 +88,12 @@ export class AnnotatorBridge {
   };
 
   /** Send the current set of comment anchors; queued until the frame is ready. */
-  sendAnchors(anchors: AnnotatorAnchorInput[]): void {
+  sendAnchors(anchors: AnnotatorAnchorInput[], showResolved = false): void {
     if (!this.ready) {
-      this.pendingAnchors = anchors;
+      this.pendingAnchors = { anchors, showResolved };
       return;
     }
-    this.post({ token: this.token, type: 'anchors', anchors });
+    this.post({ token: this.token, type: 'anchors', anchors, showResolved });
   }
 
   focusComment(commentId: string | null): void {

@@ -26,6 +26,7 @@ interface LocatedComment {
 const HIGHLIGHT_CSS = `
 ::highlight(ac-open) { background-color: rgba(255, 200, 40, 0.4); color: inherit; }
 ::highlight(ac-ambiguous) { background-color: rgba(255, 200, 40, 0.2); }
+::highlight(ac-resolved) { background-color: rgba(120, 120, 120, 0.18); color: inherit; }
 ::highlight(ac-focused) { background-color: rgba(255, 145, 0, 0.6); }
 `;
 
@@ -35,6 +36,7 @@ function start(): void {
   let anchors: AnnotatorAnchorInput[] = [];
   let located: LocatedComment[] = [];
   let focusedId: string | null = null;
+  let showResolved = false;
   let relocateTimer: number | undefined;
   let observer: MutationObserver | null = null;
 
@@ -60,17 +62,23 @@ function start(): void {
     try {
       const open: Range[] = [];
       const ambiguous: Range[] = [];
+      const resolved: Range[] = [];
       const focused: Range[] = [];
       for (const c of located) {
         if (c.input.id === focusedId) {
           focused.push(c.range);
           continue;
         }
-        if (c.input.status === 'resolved') continue; // resolved fade out entirely
+        if (c.input.status === 'resolved') {
+          // Hidden unless the sidebar is showing resolved threads.
+          if (showResolved) resolved.push(c.range);
+          continue;
+        }
         (c.ambiguous ? ambiguous : open).push(c.range);
       }
       const registry = CSS.highlights;
       const priorities: [string, Range[], number][] = [
+        ['ac-resolved', resolved, 0],
         ['ac-open', open, 1],
         ['ac-ambiguous', ambiguous, 1],
         ['ac-focused', focused, 2],
@@ -265,6 +273,7 @@ function start(): void {
     switch (msg.type) {
       case 'anchors':
         anchors = Array.isArray(msg.anchors) ? msg.anchors : [];
+        showResolved = msg.showResolved === true;
         try {
           relocateAll();
         } catch {

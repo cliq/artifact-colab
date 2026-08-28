@@ -132,7 +132,12 @@ button.ac-btn-primary:hover { background: var(--color-accent-hover); }
 #ac-composer { border: 1px solid var(--color-accent-bright); border-radius: var(--radius-md); background: var(--color-surface); padding: 10px; margin-bottom: 16px; }
 #ac-composer textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px; border: 1px solid var(--color-rule-2); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text); resize: vertical; min-height: 60px; margin: 6px 0; }
 .composer-actions { display: flex; justify-content: flex-end; gap: 8px; }
-details.resolved-section summary { cursor: pointer; font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--color-muted); text-transform: uppercase; letter-spacing: 0.04em; margin: 16px 0 8px; }
+/* Resolved threads (Resolved/All filters) read as history: muted, with a grey quote bar. */
+.thread-card.resolved { background: var(--color-bg); }
+.thread-card.resolved .thread-quote { border-left-color: var(--color-rule-2); }
+.thread-card.resolved .thread-body, .thread-card.resolved .reply-body { color: var(--color-muted); }
+.thread-resolved-meta { font-size: 11px; color: var(--color-muted); margin-bottom: 4px; }
+.thread-card.stub .thread-resolved-meta { display: none; }
 `;
 
 interface ElOptions {
@@ -431,9 +436,59 @@ function init(): void {
     return bar;
   }
 
+  // --- Open / Resolved / All filter ---------------------------------------
+  // A device preference (like the collapsed sidebar), not per document.
+  type CommentFilter = 'open' | 'resolved' | 'all';
+  const COMMENT_FILTER_KEY = 'artifact-colab:comments-filter';
+  let commentFilter: CommentFilter = 'open';
+  try {
+    const stored = localStorage.getItem(COMMENT_FILTER_KEY);
+    if (stored === 'resolved' || stored === 'all') commentFilter = stored;
+  } catch {
+    // Ignore: default to open.
+  }
+  const filterButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.comment-filter button[data-filter]'));
+  function inFilter(thread: ThreadDTO): boolean {
+    if (commentFilter === 'all') return true;
+    return commentFilter === 'resolved' ? thread.status === 'resolved' : thread.status !== 'resolved';
+  }
+  function setCommentFilter(next: CommentFilter): void {
+    if (next === commentFilter) return;
+    commentFilter = next;
+    try {
+      localStorage.setItem(COMMENT_FILTER_KEY, next);
+    } catch {
+      // Ignore.
+    }
+    if (focusedCommentId && !threads.some((t) => t.id === focusedCommentId && inFilter(t))) clearFocus();
+    sendAnchorsToFrame();
+    renderThreads();
+  }
+  for (const button of filterButtons) {
+    button.addEventListener('click', () => {
+      const value = button.dataset['filter'];
+      if (value === 'open' || value === 'resolved' || value === 'all') setCommentFilter(value);
+    });
+  }
+  function renderFilterButtons(): void {
+    const openCount = threads.filter((t) => t.status !== 'resolved').length;
+    const resolvedCount = threads.length - openCount;
+    for (const button of filterButtons) {
+      const value = button.dataset['filter'];
+      button.setAttribute('aria-selected', value === commentFilter ? 'true' : 'false');
+      const count = value === 'open' ? openCount : value === 'resolved' ? resolvedCount : threads.length;
+      let badge = button.querySelector('.count');
+      if (!badge) {
+        badge = el('span', { className: 'count' });
+        button.appendChild(badge);
+      }
+      badge.textContent = count > 0 ? String(count) : '';
+    }
+  }
+
   function sendAnchorsToFrame(): void {
     const anchors: AnnotatorAnchorInput[] = threads.map((t) => ({ id: t.id, anchor: t.anchor, status: t.status }));
-    bridge.sendAnchors(anchors);
+    bridge.sendAnchors(anchors, commentFilter !== 'open');
   }
 
   async function fetchComments(): Promise<void> {
@@ -518,6 +573,13 @@ function init(): void {
     });
 
     const meta = authorMeta(thread.author, thread.createdAt);
+    const resolvedMeta =
+      thread.status === 'resolved'
+        ? el('div', {
+            className: 'thread-resolved-meta',
+            text: `Resolved${thread.resolvedBy ? ` by ${thread.resolvedBy}` : ''}${thread.resolvedAt ? ` · ${formatTime(thread.resolvedAt)}` : ''}`,
+          })
+        : null;
 
     const body = el('div', { className: 'thread-body', text: thread.body });
     const reactions = reactionsBar(thread.id, thread.reactions);
@@ -611,7 +673,7 @@ function init(): void {
     const card = el(
       'div',
       {
-        className: `thread-card${focusedCommentId === thread.id ? ' focused' : ''}`,
+        className: `thread-card${focusedCommentId === thread.id ? ' focused' : ''}${thread.status === 'resolved' ? ' resolved' : ''}`,
         attrs: { 'data-comment-id': thread.id },
         onClick: () => {
           // An off-screen anchor (edge stub, or the focused card clamped at an
@@ -621,7 +683,7 @@ function init(): void {
           focusThread(thread.id);
         },
       },
-      [badges, quote, meta, body, reactions, collapsedInfo, repliesEl, replyForm, actions],
+      [badges, quote, meta, ...(resolvedMeta ? [resolvedMeta] : []), body, reactions, collapsedInfo, repliesEl, replyForm, actions],
     );
     return card;
   }
@@ -668,13 +730,17 @@ function init(): void {
     alignedZone.textContent = '';
     alignedCards.clear();
 
-    const open = threads.filter((t) => t.status === 'open' && effectiveState(t) !== 'orphaned');
-    const orphaned = threads.filter((t) => t.status === 'open' && effectiveState(t) === 'orphaned');
-    const resolved = threads.filter((t) => t.status === 'resolved');
+    renderFilterButtons();
+    const shown = threads.filter(inFilter);
+    const open = shown.filter((t) => effectiveState(t) !== 'orphaned');
+    const orphaned = shown.filter((t) => effectiveState(t) === 'orphaned');
 
-    threadsEl.appendChild(el('div', { className: 'section-header', text: 'Open' }));
+    const sectionTitle = commentFilter === 'open' ? 'Open' : commentFilter === 'resolved' ? 'Resolved' : 'All comments';
+    threadsEl.appendChild(el('div', { className: 'section-header', text: sectionTitle }));
     if (open.length === 0) {
-      threadsEl.appendChild(el('div', { className: 'section-empty', text: 'No open comments.' }));
+      const empty =
+        commentFilter === 'open' ? 'No open comments.' : commentFilter === 'resolved' ? 'No resolved comments.' : 'No comments yet.';
+      threadsEl.appendChild(el('div', { className: 'section-empty', text: empty }));
     }
     cardResizeObserver?.disconnect();
     unplacedZone.textContent = '';
@@ -695,17 +761,13 @@ function init(): void {
       for (const thread of orphaned) threadsEl.appendChild(buildThreadCard(thread));
     }
 
-    const details = el('details', { className: 'resolved-section' });
-    details.appendChild(el('summary', { text: `Resolved (${resolved.length})` }));
-    for (const thread of resolved) details.appendChild(buildThreadCard(thread));
-    threadsEl.appendChild(details);
-
-    const openCount = open.length + orphaned.length;
+    // The header/rail count is always the open work, whatever the filter shows.
+    const openCount = threads.filter((t) => t.status !== 'resolved').length;
     const title = openCount > 0 ? `Comments (${openCount})` : 'Comments';
     if (commentsTitle) commentsTitle.textContent = title;
     if (railLabel) railLabel.textContent = title;
-    if (prevButton) prevButton.disabled = openCount === 0;
-    if (nextButton) nextButton.disabled = openCount === 0;
+    if (prevButton) prevButton.disabled = shown.length === 0;
+    if (nextButton) nextButton.disabled = shown.length === 0;
 
     if (activeReplyId) {
       const replacement = threadsEl.querySelector<HTMLTextAreaElement>(
@@ -720,10 +782,10 @@ function init(): void {
     alignCards();
   }
 
-  /** Open comment ids in document order (live anchor position, then list order). */
+  /** Shown comment ids in document order (live anchor position, then list order). */
   function navigableIds(): string[] {
     return threads
-      .filter((t) => t.status === 'open')
+      .filter(inFilter)
       .map((t, i) => {
         const pos = framePositions.get(t.id);
         return { id: t.id, top: pos?.top ?? Number.MAX_SAFE_INTEGER, start: pos?.start ?? i };

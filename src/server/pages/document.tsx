@@ -84,6 +84,12 @@ main { flex: 1 1 auto; min-height: 0; max-width: none; width: 100%; margin: 0; p
 .comment-nav button:hover:not(:disabled) { background: var(--color-bg); color: var(--color-accent); }
 .comment-nav button:disabled { opacity: 0.35; cursor: default; }
 .sidebar-inner { overflow-y: auto; flex: 1; padding: 12px 16px; }
+.comment-filter { flex: none; display: flex; gap: 2px; margin: 10px 16px 0; padding: 2px; border: 1px solid var(--color-border); border-radius: var(--radius-pill); background: var(--color-bg); }
+.comment-filter button { flex: 1; font: inherit; font-size: 12px; font-weight: 500; padding: 4px 8px; border: none; border-radius: var(--radius-pill); background: transparent; color: var(--color-muted); cursor: pointer; transition: background 150ms ease-out, color 150ms ease-out; }
+.comment-filter button:hover { color: var(--color-accent); }
+.comment-filter button[aria-selected='true'] { background: var(--color-surface); color: var(--color-ink); box-shadow: var(--shadow-whisper); }
+.comment-filter .count { font-family: var(--font-mono); font-size: 10px; margin-left: 4px; color: var(--color-muted); }
+.sidebar.collapsed .comment-filter { display: none; }
 #no-highlights-banner { padding: 8px 12px; background: #fef3c7; font-size: 12px; border-bottom: 1px solid #fde68a; }
 .sidebar.collapsed { width: 40px; }
 .sidebar.collapsed .sidebar-header, .sidebar.collapsed #no-highlights-banner, .sidebar.collapsed .sidebar-inner { display: none; }
@@ -278,6 +284,17 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
                 </svg>
               </button>
             </div>
+          </div>
+          <div class="comment-filter" role="tablist" aria-label="Which comments to show">
+            <button type="button" role="tab" data-filter="open" aria-selected="true">
+              Open
+            </button>
+            <button type="button" role="tab" data-filter="resolved" aria-selected="false">
+              Resolved
+            </button>
+            <button type="button" role="tab" data-filter="all" aria-selected="false">
+              All
+            </button>
           </div>
           <div id="no-highlights-banner" hidden>
             This browser can't paint in-page highlights; comments still work from the sidebar.

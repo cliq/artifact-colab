@@ -148,13 +148,17 @@ test.describe('happy path', () => {
 
     await card.locator('button:has-text("Resolve")').click();
 
-    const resolvedDetails = page.locator('details.resolved-section');
-    await expect(resolvedDetails).toContainText(commentBody);
-    await resolvedDetails.locator('summary').click();
-
-    const resolvedCard = resolvedDetails.locator('.thread-card', { hasText: commentBody });
+    // Resolved threads leave the Open view; the Resolved filter shows them.
+    await expect(card).toHaveCount(0);
+    await page.locator('.comment-filter button[data-filter="resolved"]').click();
+    const resolvedCard = page.locator('.thread-card.resolved', { hasText: commentBody });
+    await expect(resolvedCard).toBeVisible();
+    await expect(resolvedCard).toContainText('Resolved by');
+    await resolvedCard.click();
     await resolvedCard.locator('button:has-text("Reopen")').click();
+    await expect(resolvedCard).toHaveCount(0);
 
+    await page.locator('.comment-filter button[data-filter="open"]').click();
     const openCard = page.locator('.thread-card', { hasText: commentBody });
     await expect(openCard).toBeVisible();
     await openCard.click();

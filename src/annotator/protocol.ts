@@ -21,7 +21,8 @@ export interface AnnotatorAnchorInput {
 /** Parent → frame. */
 export type ParentMessage =
   | { token: string; type: 'annotator-init' }
-  | { token: string; type: 'anchors'; anchors: AnnotatorAnchorInput[] }
+  /** `showResolved` paints resolved anchors (muted) instead of hiding them — the sidebar's Resolved/All filters. */
+  | { token: string; type: 'anchors'; anchors: AnnotatorAnchorInput[]; showResolved?: boolean }
   | { token: string; type: 'focus'; commentId: string | null }
   | { token: string; type: 'scroll'; commentId: string };
 
