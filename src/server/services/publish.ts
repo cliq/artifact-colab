@@ -117,7 +117,7 @@ export function publishArtifact(db: DB, config: Config, user: User, teamId: stri
 
   const versionId = id();
   db.insert(versions)
-    .values({ id: versionId, documentId: docId, number: versionNumber, html, sourceMarkdown: markdown ?? null, publishedAt: now })
+    .values({ id: versionId, documentId: docId, number: versionNumber, html, sourceMarkdown: markdown ?? null, publishedAt: now, publishedBy: user.id })
     .run();
   db.update(documents).set({ currentVersionId: versionId }).where(eq(documents.id, docId)).run();
   if (incoming.length > 0) upsertAssets(db, docId, incoming, now);

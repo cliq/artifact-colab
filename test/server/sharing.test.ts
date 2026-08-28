@@ -236,6 +236,24 @@ describe('public sharing', () => {
     expect(options.map(([, value, state]) => `${value}:${state}`)).toEqual(['private:false', 'team:true', 'public:false']);
   });
 
+  test('the version picker shows when each version was published and by whom', async () => {
+    const owner = getOrCreateUser(db, 'owner@example.com', new Date());
+    const republished = publishArtifact(db, config, owner, 'team-example', {
+      title: 'Launch Plan',
+      html: V1_HTML,
+      documentId: slug,
+    });
+    expect(republished.ok).toBe(true);
+    // The seeded v1 has no publisher recorded (predates the column): it falls back to a placeholder.
+    const html = await (await app.request(`/d/${slug}`, { headers: { cookie: ownerCookie } })).text();
+    const v2 = db.select().from(versions).where(and(eq(versions.documentId, slug), eq(versions.number, 2))).get()!;
+    expect(v2.publishedBy).toBe(ownerId);
+    expect(html).toContain(`data-published-at="${v2.publishedAt.toISOString()}"`);
+    expect(html).toContain('data-publisher="owner@example.com"');
+    expect(html).toContain('data-publisher="unknown user"');
+    expect(html).toContain(`v2 · ${v2.publishedAt.toISOString().slice(0, 16).replace('T', ' ')} UTC · owner@example.com`);
+  });
+
   test('findDocumentForViewer reports membership', async () => {
     expect(findDocumentForViewer(db, slug, ownerId)).toMatchObject({ isMember: true });
     db.update(documents).set({ visibility: 'public' }).where(eq(documents.id, slug)).run();

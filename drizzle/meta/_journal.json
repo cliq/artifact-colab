@@ -50,6 +50,13 @@
       "when": 1787060892189,
       "tag": "0006_public-sharing",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1787925732653,
+      "tag": "0007_version-publisher",
+      "breakpoints": true
     }
   ]
 }

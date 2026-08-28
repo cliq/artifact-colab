@@ -220,6 +220,11 @@ export const versions = sqliteTable(
      */
     sourceMarkdown: text('source_markdown'),
     publishedAt: integer('published_at', { mode: 'timestamp_ms' }).notNull(),
+    /**
+     * Who published this version. Null only for versions that predate the
+     * column and whose backfill (the document's creator) found no user.
+     */
+    publishedBy: text('published_by').references(() => users.id),
   },
   (table) => [
     index('versions_document_id_idx').on(table.documentId),

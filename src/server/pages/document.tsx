@@ -10,13 +10,24 @@ import type { FC } from 'hono/jsx';
 import type { Document, User, Version } from '../db/schema.js';
 import { Layout } from './layout.js';
 
+/** A version plus who published it (null when the publisher is unknown, e.g. a deleted user). */
+export type VersionSummary = Pick<Version, 'id' | 'number' | 'publishedAt'> & {
+  publisherName: string | null;
+  publisherEmail: string | null;
+};
+
+/** Display name for a version's publisher: profile name, else the email, else a placeholder. */
+export function publisherLabel(version: VersionSummary): string {
+  return version.publisherName?.trim() || version.publisherEmail || 'unknown user';
+}
+
 export interface DocumentPageProps {
   user: User;
   csrfToken: string;
   document: Document;
-  versions: Pick<Version, 'id' | 'number' | 'publishedAt'>[];
+  versions: VersionSummary[];
   /** The version being displayed (defaults to the document's current one). */
-  shownVersion: Pick<Version, 'id' | 'number' | 'publishedAt'>;
+  shownVersion: VersionSummary;
   /** Whether the signed-in user watches this document (comment digest emails). */
   watching: boolean;
   /** Whether the signed-in user may delete this document (member and author-or-team-admin). */
@@ -148,8 +159,13 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
               Version
               <select id="version-picker">
                 {versions.map((v) => (
-                  <option value={String(v.number)} selected={v.id === shownVersion.id}>
-                    v{v.number}
+                  <option
+                    value={String(v.number)}
+                    selected={v.id === shownVersion.id}
+                    data-published-at={v.publishedAt.toISOString()}
+                    data-publisher={publisherLabel(v)}
+                  >
+                    v{v.number} · {v.publishedAt.toISOString().slice(0, 16).replace('T', ' ')} UTC · {publisherLabel(v)}
                   </option>
                 ))}
               </select>

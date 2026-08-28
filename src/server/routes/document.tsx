@@ -11,7 +11,7 @@ import type { Context } from 'hono';
 import { Hono } from 'hono';
 
 import type { AppEnv } from '../context.js';
-import { comments, versions, type Document } from '../db/schema.js';
+import { comments, users, versions, type Document } from '../db/schema.js';
 import { csrfTokenFor } from '../middleware.js';
 import { DocumentDeletePage, DocumentPage } from '../pages/document.js';
 import { safeLocalPath } from '../safeRedirect.js';
@@ -76,8 +76,15 @@ documentRoutes.get('/d/:slug', (c) => {
   const doc = access.document;
 
   const versionRows = db
-    .select({ id: versions.id, number: versions.number, publishedAt: versions.publishedAt })
+    .select({
+      id: versions.id,
+      number: versions.number,
+      publishedAt: versions.publishedAt,
+      publisherName: users.name,
+      publisherEmail: users.email,
+    })
     .from(versions)
+    .leftJoin(users, eq(users.id, versions.publishedBy))
     .where(eq(versions.documentId, doc.id))
     .orderBy(asc(versions.number))
     .all();

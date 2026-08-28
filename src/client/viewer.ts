@@ -192,6 +192,13 @@ function init(): void {
   versionPicker?.addEventListener('change', () => {
     location.href = `${location.pathname}?version=${encodeURIComponent(versionPicker.value)}`;
   });
+  // The server labels options in UTC (works without JS); swap in the viewer's local time.
+  for (const option of Array.from(versionPicker?.options ?? [])) {
+    const publishedAt = new Date(option.dataset.publishedAt ?? '');
+    if (Number.isNaN(publishedAt.getTime())) continue;
+    const when = publishedAt.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+    option.textContent = `v${option.value} · ${when} · ${option.dataset.publisher ?? ''}`;
+  }
 
   const copyLinkButton = document.getElementById('copy-share-link') as HTMLButtonElement | null;
   copyLinkButton?.addEventListener('click', () => {
