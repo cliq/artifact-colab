@@ -42,7 +42,10 @@ await frame.locator('h1').evaluate((h) => h.scrollIntoView({ block: 'start' }));
 await page.locator('.thread-card', { hasText: 'A long discussion thread lives here.' }).click();
 await shot('3-focused-long-thread');
 
-// Focus the second of the same-line pair.
+// Focus the second of the same-line pair (deselect first: while the long
+// thread is focused, its neighbours are folded away).
+await page.locator('main h1').click();
+await page.waitForTimeout(300);
 await page.locator('.thread-card', { hasText: 'Second comment on the same line' }).click();
 await shot('4-focused-tie');
 

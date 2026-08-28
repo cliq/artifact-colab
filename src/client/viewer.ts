@@ -77,6 +77,11 @@ const SIDEBAR_CSS = `
 .thread-card.stub .thread-quote { margin-bottom: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .thread-card.stub .thread-badges, .thread-card.stub .thread-meta, .thread-card.stub .thread-body, .thread-card.stub.collapsed .thread-collapsed-info { display: none; }
 .thread-card.stub:hover { opacity: 1; }
+.thread-card.edge-hidden { display: none; }
+/* Folds the stubs beyond the nearest few into a count; clicking jumps to the nearest folded comment. */
+.edge-more { position: absolute; left: 0; right: 0; margin: 0; font: inherit; font-size: 11px; color: var(--color-muted); background: transparent; border: 1px dashed var(--color-border); border-radius: var(--radius-md); padding: 4px 12px; cursor: pointer; text-align: center; }
+.edge-more:hover { color: var(--color-accent); border-color: var(--color-rule-2); }
+.edge-more[hidden] { display: none; }
 .thread-card:hover { border-color: var(--color-rule-2); }
 .thread-card.focused { border-color: var(--color-accent-bright); box-shadow: 0 0 0 1px var(--color-accent-bright); }
 .thread-quote { font-style: italic; font-size: 12px; color: var(--color-muted); cursor: pointer; margin-bottom: 6px; border-left: 2px solid var(--color-accent-bright); padding-left: 6px; }
@@ -542,6 +547,22 @@ function init(): void {
   /** Latest viewport-relative anchor tops (frame CSS px) and text offsets from the annotator. */
   const framePositions = new Map<string, AnchorPosition>();
   const alignedZone = el('div', { className: 'aligned-zone' });
+  /** How many off-screen stubs an edge pile shows before folding the rest into a count. */
+  const MAX_EDGE_STUBS = 3;
+  function edgeMoreButton(): HTMLButtonElement {
+    const button = el('button', { className: 'edge-more', attrs: { type: 'button' } });
+    button.hidden = true;
+    button.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = button.dataset['targetId'];
+      if (!id) return;
+      bridge.scrollToComment(id);
+      focusThread(id);
+    });
+    return button;
+  }
+  const aboveMore = edgeMoreButton();
+  const belowMore = edgeMoreButton();
   /** Open cards whose anchor currently has no on-page position (e.g. inside a closed <details>); listed in normal flow. */
   const unplacedZone = el('div', { className: 'unplaced-zone' });
   // Card heights change on their own (reply textarea dragged, error text,
@@ -580,6 +601,8 @@ function init(): void {
       alignedZone.appendChild(card);
       cardResizeObserver?.observe(card);
     }
+    alignedZone.appendChild(aboveMore);
+    alignedZone.appendChild(belowMore);
     threadsEl.appendChild(alignedZone);
     threadsEl.appendChild(unplacedZone);
 
@@ -758,21 +781,43 @@ function init(): void {
     above.sort(byPosition);
     below.sort(byPosition);
 
+    // Only the few stubs nearest the viewport stay visible; the rest fold
+    // into a "N more" button that jumps to the nearest folded comment.
+    const foldedAbove = above.splice(0, Math.max(0, above.length - MAX_EDGE_STUBS));
+    const foldedBelow = below.splice(MAX_EDGE_STUBS);
+    for (const entry of [...above, ...below, ...placed]) entry.card.classList.remove('edge-hidden');
+    for (const entry of [...foldedAbove, ...foldedBelow]) entry.card.classList.add('edge-hidden');
+    const setFold = (button: HTMLButtonElement, folded: AlignEntry[], nearest: AlignEntry | undefined, where: string): void => {
+      button.hidden = folded.length === 0;
+      if (nearest === undefined) return;
+      button.textContent = `${folded.length} more ${where}`;
+      button.dataset['targetId'] = nearest.id;
+    };
+    setFold(aboveMore, foldedAbove, foldedAbove[foldedAbove.length - 1], 'above');
+    setFold(belowMore, foldedBelow, foldedBelow[0], 'below');
+
     // 2. Measure after the class changes above (they alter heights). Reads
     //    happen before any writes so the browser lays out once.
     for (const entry of [...placed, ...above, ...below]) entry.height = entry.card.offsetHeight;
+    const aboveMoreHeight = aboveMore.hidden ? 0 : aboveMore.offsetHeight + STUB_GAP;
+    const belowMoreHeight = belowMore.hidden ? 0 : belowMore.offsetHeight + STUB_GAP;
 
     // 3. Edge piles. Stubs for anchors above the viewport stack down from the
     //    top; those below stack up from the bottom (laid out after the visible
     //    cards, which take priority for the space in between).
     let cursor = 0;
+    if (!aboveMore.hidden) {
+      aboveMore.style.top = '0px';
+      cursor = aboveMoreHeight;
+    }
     for (const entry of above) {
       entry.card.style.top = `${cursor}px`;
       cursor += entry.height + STUB_GAP;
     }
-    const bandTop = above.length > 0 ? cursor - STUB_GAP + CARD_GAP : 0;
-    const belowHeight = below.reduce((sum, entry) => sum + entry.height + STUB_GAP, 0) - STUB_GAP;
-    const bandBottom = below.length > 0 ? viewportHeight - belowHeight - CARD_GAP : viewportHeight;
+    const bandTop = cursor > 0 ? cursor - STUB_GAP + CARD_GAP : 0;
+    const belowHeight = below.reduce((sum, entry) => sum + entry.height + STUB_GAP, 0) + belowMoreHeight - STUB_GAP;
+    const hasBelow = below.length > 0 || !belowMore.hidden;
+    const bandBottom = hasBelow ? viewportHeight - belowHeight - CARD_GAP : viewportHeight;
 
     // 4. Visible cards: greedy clustering. Each card starts as its own
     //    cluster at its (band-clamped) target; whenever it would overlap the
@@ -832,12 +877,16 @@ function init(): void {
 
     // When the visible cards need more than the band, the bottom pile yields
     // and the zone grows (the sidebar scrolls) rather than overlapping them.
-    cursor = below.length > 0 ? Math.max(viewportHeight - belowHeight, visibleBottom + CARD_GAP) : visibleBottom;
+    cursor = hasBelow ? Math.max(viewportHeight - belowHeight, visibleBottom + CARD_GAP) : visibleBottom;
     for (const entry of below) {
       entry.card.style.top = `${cursor}px`;
       cursor += entry.height + STUB_GAP;
     }
-    const bottom = Math.max(viewportHeight, visibleBottom, below.length > 0 ? cursor - STUB_GAP : 0);
+    if (!belowMore.hidden) {
+      belowMore.style.top = `${cursor}px`;
+      cursor += belowMoreHeight;
+    }
+    const bottom = Math.max(viewportHeight, visibleBottom, hasBelow ? cursor - STUB_GAP : 0);
     alignedZone.style.height = `${bottom}px`;
     return misfit;
   }
