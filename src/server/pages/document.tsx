@@ -61,6 +61,14 @@ main { flex: 1 1 auto; min-height: 0; max-width: none; width: 100%; margin: 0; p
 .viewer-toolbar .watch-btn:hover { background: var(--color-bg); color: var(--color-accent); }
 .viewer-toolbar .watch-btn.watching { color: var(--color-accent); }
 .viewer-toolbar .shared-note { font-size: 12px; color: var(--color-muted); background: var(--color-bg); border-radius: 4px; padding: 2px 8px; }
+.version-menu summary { font-family: var(--font-mono); font-weight: 600; }
+.version-panel { min-width: 260px; padding: 6px; }
+.version-option { display: block; padding: 7px 10px; border-radius: 8px; text-decoration: none; color: var(--color-text); }
+.version-option:hover { background: var(--color-paper-2); text-decoration: none; }
+.version-option[aria-selected='true'] { background: var(--color-accent-wash); }
+.version-option .version-number { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
+.version-option .version-current { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-accent); }
+.version-option .version-details { display: block; font-size: 12px; color: var(--color-muted); margin-top: 2px; white-space: nowrap; }
 .share-panel { width: 300px; padding: 12px 14px; }
 .share-panel h2 { font-size: 13px; font-weight: 600; margin: 0 0 8px; padding: 0 2px; }
 .share-option { display: grid; grid-template-columns: 16px 1fr; gap: 10px; align-items: start; width: 100%; text-align: left; padding: 8px 10px; margin-bottom: 4px; border: 1px solid transparent; border-radius: 8px; background: transparent; font: inherit; color: var(--color-text); cursor: pointer; }
@@ -161,21 +169,35 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
               <span class="stale-note">viewing an old version — commenting disabled</span>
             )}
             <div class="toolbar-spacer"></div>
-            <label>
-              Version
-              <select id="version-picker">
-                {versions.map((v) => (
-                  <option
-                    value={String(v.number)}
-                    selected={v.id === shownVersion.id}
-                    data-published-at={v.publishedAt.toISOString()}
-                    data-publisher={publisherLabel(v)}
+            {/* A menu rather than a <select>: the closed state shows only the
+                version number while each row carries the full timestamp and
+                publisher (a native select shows the same text in both places). */}
+            <details class="settings-menu version-menu">
+              <summary id="version-picker" aria-label={`Version ${shownVersion.number}`}>
+                v{shownVersion.number}
+              </summary>
+              <div class="settings-menu-items version-panel" role="listbox" aria-label="Versions">
+                {[...versions].reverse().map((v) => (
+                  <a
+                    class="version-option"
+                    role="option"
+                    aria-selected={v.id === shownVersion.id ? 'true' : 'false'}
+                    href={v.id === document.currentVersionId ? `/d/${document.id}` : `/d/${document.id}?version=${v.number}`}
+                    data-version={String(v.number)}
                   >
-                    v{v.number} · {v.publishedAt.toISOString().slice(0, 16).replace('T', ' ')} UTC · {publisherLabel(v)}
-                  </option>
+                    <span class="version-number">
+                      v{v.number}
+                      {v.id === document.currentVersionId && <span class="version-current">current</span>}
+                    </span>
+                    <span class="version-details">
+                      <time datetime={v.publishedAt.toISOString()}>{v.publishedAt.toISOString().slice(0, 16).replace('T', ' ')} UTC</time>
+                      {' · '}
+                      {publisherLabel(v)}
+                    </span>
+                  </a>
                 ))}
-              </select>
-            </label>
+              </div>
+            </details>
             {isMember ? (
               <details class="settings-menu share-menu">
                 <summary>{currentShare.summary}</summary>

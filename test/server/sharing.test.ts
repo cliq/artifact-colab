@@ -248,10 +248,11 @@ describe('public sharing', () => {
     const html = await (await app.request(`/d/${slug}`, { headers: { cookie: ownerCookie } })).text();
     const v2 = db.select().from(versions).where(and(eq(versions.documentId, slug), eq(versions.number, 2))).get()!;
     expect(v2.publishedBy).toBe(ownerId);
-    expect(html).toContain(`data-published-at="${v2.publishedAt.toISOString()}"`);
-    expect(html).toContain('data-publisher="owner@example.com"');
-    expect(html).toContain('data-publisher="unknown user"');
-    expect(html).toContain(`v2 · ${v2.publishedAt.toISOString().slice(0, 16).replace('T', ' ')} UTC · owner@example.com`);
+    // The closed menu shows only the number; each row carries timestamp and publisher.
+    expect(html).toMatch(/<summary id="version-picker"[^>]*>\s*v2\s*<\/summary>/);
+    expect(html).toContain(`<time datetime="${v2.publishedAt.toISOString()}">`);
+    expect(html).toContain(' · owner@example.com');
+    expect(html).toContain(' · unknown user');
   });
 
   test('findDocumentForViewer reports membership', async () => {

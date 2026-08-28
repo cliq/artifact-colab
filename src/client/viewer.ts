@@ -222,7 +222,6 @@ function init(): void {
   const dataEl = document.getElementById('viewer-data');
   const iframe = document.getElementById('artifact-frame') as HTMLIFrameElement | null;
   const sidebar = document.getElementById('sidebar');
-  const versionPicker = document.getElementById('version-picker') as HTMLSelectElement | null;
   const noHighlightsBanner = document.getElementById('no-highlights-banner');
   const commentsTitle = document.getElementById('comments-title');
   const railLabel = document.getElementById('comments-rail-label');
@@ -233,17 +232,6 @@ function init(): void {
   const data: ViewerData = JSON.parse(dataEl.textContent);
 
   injectStyles();
-
-  versionPicker?.addEventListener('change', () => {
-    location.href = `${location.pathname}?version=${encodeURIComponent(versionPicker.value)}`;
-  });
-  // The server labels options in UTC (works without JS); swap in the viewer's local time.
-  for (const option of Array.from(versionPicker?.options ?? [])) {
-    const publishedAt = new Date(option.dataset.publishedAt ?? '');
-    if (Number.isNaN(publishedAt.getTime())) continue;
-    const when = publishedAt.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-    option.textContent = `v${option.value} · ${when} · ${option.dataset.publisher ?? ''}`;
-  }
 
   const copyLinkButton = document.getElementById('copy-share-link') as HTMLButtonElement | null;
   copyLinkButton?.addEventListener('click', () => {
