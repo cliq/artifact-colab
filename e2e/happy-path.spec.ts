@@ -140,6 +140,8 @@ test.describe('happy path', () => {
   test('reply, resolve, and reopen the comment', async () => {
     const card = page.locator('.thread-card', { hasText: commentBody });
 
+    // Unfocused cards are collapsed (no reply form); clicking expands.
+    await card.click();
     await card.locator('.reply-form textarea').fill(replyBody);
     await card.locator('.reply-form button:has-text("Reply")').click();
     await expect(card.locator('.reply', { hasText: replyBody })).toBeVisible();
@@ -155,11 +157,13 @@ test.describe('happy path', () => {
 
     const openCard = page.locator('.thread-card', { hasText: commentBody });
     await expect(openCard).toBeVisible();
+    await openCard.click();
     await expect(openCard.locator('button:has-text("Resolve")')).toBeVisible();
   });
 
   test('Enter sends a reply, Shift+Enter makes a line break', async () => {
     const card = page.locator('.thread-card', { hasText: commentBody });
+    await card.click();
     const textarea = card.locator('.reply-form textarea');
 
     await textarea.click();
@@ -181,6 +185,7 @@ test.describe('happy path', () => {
 
   test('clicking the reply textarea keeps focus and preserves the draft', async () => {
     const card = page.locator('.thread-card', { hasText: commentBody });
+    await card.click();
     const textarea = card.locator('.reply-form textarea');
 
     // Clicking the textarea bubbles to the card's focus handler; the sidebar
@@ -248,8 +253,10 @@ test.describe('happy path', () => {
     // Let the post-resize relocate/reflow finish first: a smooth scroll
     // started while the frame is still settling gets canceled by the browser.
     await page.waitForTimeout(750);
+    // With its anchor off-screen the card is an edge stub; clicking it scrolls
+    // the passage into view and expands the card.
     const card = page.locator('.thread-card', { hasText: commentBody });
-    await card.locator('.reply-form textarea').click();
+    await card.click();
 
     await expect
       .poll(async () => {

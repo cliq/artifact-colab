@@ -42,8 +42,16 @@ export type FrameMessage =
   /** Natural content width, so the parent can scale wide artifacts to fit. */
   | { token: string; type: 'layout'; contentWidth: number }
   /**
-   * Current viewport-relative y (frame CSS px) of each located anchor,
+   * Current viewport-relative y (frame CSS px) of each located anchor plus
+   * its text offset (a stable tie-breaker for anchors on the same line),
    * streamed on scroll/resize/re-render so the sidebar can align comment
-   * cards with the content they reference.
+   * cards with the content they reference. Anchors whose range has no box
+   * (inside a closed <details>, display:none, …) are left out.
    */
-  | { token: string; type: 'positions'; positions: { id: string; top: number }[] };
+  | { token: string; type: 'positions'; positions: AnchorPosition[] };
+
+export interface AnchorPosition {
+  id: string;
+  top: number;
+  start: number;
+}

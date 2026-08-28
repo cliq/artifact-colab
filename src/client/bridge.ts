@@ -6,7 +6,7 @@
  */
 
 import type { TextAnchor } from '../anchoring/text.js';
-import type { AnchorState, AnnotatorAnchorInput, FrameMessage, ParentMessage } from '../annotator/protocol.js';
+import type { AnchorPosition, AnchorState, AnnotatorAnchorInput, FrameMessage, ParentMessage } from '../annotator/protocol.js';
 
 export interface BridgeCallbacks {
   onReady?: () => void;
@@ -19,7 +19,7 @@ export interface BridgeCallbacks {
   onHighlightClick?: (commentIds: string[]) => void;
   onAnchorStates?: (states: { id: string; state: AnchorState }[]) => void;
   onLayout?: (contentWidth: number) => void;
-  onPositions?: (positions: { id: string; top: number }[]) => void;
+  onPositions?: (positions: AnchorPosition[]) => void;
 }
 
 function randomToken(): string {

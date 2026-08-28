@@ -5,7 +5,7 @@
  * tests.
  */
 
-import type { AnchorState, AnnotatorAnchorInput } from '../annotator/protocol.js';
+import type { AnchorPosition, AnchorState, AnnotatorAnchorInput } from '../annotator/protocol.js';
 import type { TextAnchor } from '../anchoring/text.js';
 import { AnnotatorBridge } from './bridge.js';
 
@@ -65,6 +65,18 @@ const SIDEBAR_CSS = `
 .thread-card { border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-whisper); padding: 12px; margin-bottom: 10px; cursor: pointer; transition: border-color 150ms ease-out, box-shadow 150ms ease-out; }
 .aligned-zone { position: relative; }
 .thread-card.aligned { position: absolute; left: 0; right: 0; margin: 0; transition: top 140ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out; }
+/* While the artifact scrolls, cards track their anchors instantly; easing would make them rubber-band. */
+.aligned-zone.scrolling .thread-card.aligned { transition-property: border-color, box-shadow; }
+/* Unfocused cards collapse to a summary so many comments fit beside their anchors; clicking one expands it. */
+.thread-card.collapsed .thread-body { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; margin-bottom: 0; }
+.thread-card.collapsed .replies, .thread-card.collapsed .reply-form, .thread-card.collapsed .thread-actions { display: none; }
+.thread-card .thread-collapsed-info { display: none; font-size: 11px; color: var(--color-muted); margin-top: 6px; }
+.thread-card.collapsed .thread-collapsed-info:not(:empty) { display: block; }
+/* Cards whose anchor is scrolled out of view shrink to a one-line stub pinned at the sidebar's edge. */
+.thread-card.stub { padding: 6px 12px; opacity: 0.75; }
+.thread-card.stub .thread-quote { margin-bottom: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.thread-card.stub .thread-badges, .thread-card.stub .thread-meta, .thread-card.stub .thread-body, .thread-card.stub.collapsed .thread-collapsed-info { display: none; }
+.thread-card.stub:hover { opacity: 1; }
 .thread-card:hover { border-color: var(--color-rule-2); }
 .thread-card.focused { border-color: var(--color-accent-bright); box-shadow: 0 0 0 1px var(--color-accent-bright); }
 .thread-quote { font-style: italic; font-size: 12px; color: var(--color-muted); cursor: pointer; margin-bottom: 6px; border-left: 2px solid var(--color-accent-bright); padding-left: 6px; }
@@ -365,6 +377,8 @@ function init(): void {
     for (const card of threadsEl.querySelectorAll('.thread-card')) {
       card.classList.toggle('focused', card.getAttribute('data-comment-id') === focusedCommentId);
     }
+    // Expanding/collapsing changes card heights, so the aligned cards reflow.
+    alignCards();
   }
 
   function focusThread(id: string, opts?: { scroll?: boolean }): void {
@@ -499,23 +513,41 @@ function init(): void {
       replyError,
     ]);
 
+    const replyCount = thread.replies.length;
+    const collapsedInfo = el('div', {
+      className: 'thread-collapsed-info',
+      text: replyCount === 0 ? '' : `${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}`,
+    });
+
     const card = el(
       'div',
       {
         className: `thread-card${focusedCommentId === thread.id ? ' focused' : ''}`,
         attrs: { 'data-comment-id': thread.id },
-        onClick: () => focusThread(thread.id),
+        onClick: () => {
+          // An off-screen anchor (edge stub, or the focused card clamped at an
+          // edge): expanding in place would leave the card pinned there, so
+          // bring the passage into view as well.
+          if (card.dataset['offscreen'] === 'true') bridge.scrollToComment(thread.id);
+          focusThread(thread.id);
+        },
       },
-      [badges, quote, meta, body, repliesEl, replyForm, actions],
+      [badges, quote, meta, body, collapsedInfo, repliesEl, replyForm, actions],
     );
     return card;
   }
 
-  /** Cards in the aligned zone, for the position pass. */
+  /** Open cards that follow their anchors, for the position pass. */
   const alignedCards = new Map<string, HTMLElement>();
-  /** Latest viewport-relative anchor tops (frame CSS px) from the annotator. */
-  const framePositions = new Map<string, number>();
+  /** Latest viewport-relative anchor tops (frame CSS px) and text offsets from the annotator. */
+  const framePositions = new Map<string, AnchorPosition>();
   const alignedZone = el('div', { className: 'aligned-zone' });
+  /** Open cards whose anchor currently has no on-page position (e.g. inside a closed <details>); listed in normal flow. */
+  const unplacedZone = el('div', { className: 'unplaced-zone' });
+  // Card heights change on their own (reply textarea dragged, error text,
+  // avatars loading, collapse toggles); reflow whenever one does.
+  const cardResizeObserver =
+    typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => alignCards());
 
   function renderThreads(): void {
     // Rebuilding replaces every node; if the user is typing a reply, carry
@@ -539,13 +571,17 @@ function init(): void {
     if (open.length === 0) {
       threadsEl.appendChild(el('div', { className: 'section-empty', text: 'No open comments.' }));
     }
+    cardResizeObserver?.disconnect();
+    unplacedZone.textContent = '';
     for (const thread of open) {
       const card = buildThreadCard(thread);
       card.classList.add('aligned');
       alignedCards.set(thread.id, card);
       alignedZone.appendChild(card);
+      cardResizeObserver?.observe(card);
     }
     threadsEl.appendChild(alignedZone);
+    threadsEl.appendChild(unplacedZone);
 
     if (orphaned.length > 0) {
       threadsEl.appendChild(el('div', { className: 'section-header', text: 'Orphaned' }));
@@ -581,8 +617,11 @@ function init(): void {
   function navigableIds(): string[] {
     return threads
       .filter((t) => t.status === 'open')
-      .map((t, i) => ({ id: t.id, pos: framePositions.get(t.id) ?? Number.MAX_SAFE_INTEGER - i }))
-      .sort((a, b) => a.pos - b.pos)
+      .map((t, i) => {
+        const pos = framePositions.get(t.id);
+        return { id: t.id, top: pos?.top ?? Number.MAX_SAFE_INTEGER, start: pos?.start ?? i };
+      })
+      .sort((a, b) => a.top - b.top || a.start - b.start)
       .map((t) => t.id);
   }
 
@@ -599,40 +638,219 @@ function init(): void {
   prevButton?.addEventListener('click', () => navigateComments(-1));
   nextButton?.addEventListener('click', () => navigateComments(1));
 
+  const CARD_GAP = 10;
+  const STUB_GAP = 4;
+  /** Anchors this close to the frame's bottom edge count as out of view (their card would not fit anyway). */
+  const BOTTOM_EDGE_SLACK = 24;
+  /** How much the focused card outweighs its neighbours when a cluster picks where to sit. */
+  const FOCUS_WEIGHT = 1000;
+
+  interface AlignEntry {
+    id: string;
+    card: HTMLElement;
+    /** Anchor y in the aligned zone's coordinate space. */
+    target: number;
+    start: number;
+    height: number;
+    weight: number;
+  }
+
   /**
-   * Google-Docs-style alignment: each open card aims at its anchor's current
-   * on-screen y inside the frame; overlapping targets sweep downward so cards
-   * never collide. Cards without a known position stack after the last one.
+   * Google-Docs-style alignment. Each open card aims at its anchor's current
+   * on-screen y inside the frame:
+   *
+   * - Cards whose anchor is scrolled out of view shrink to one-line stubs
+   *   stacked at the top/bottom edge, so the zone never grows past the
+   *   sidebar's height and off-screen comments stay one click away.
+   * - Visible cards that would overlap are merged into clusters; a cluster
+   *   sits where its members' combined misalignment is smallest (instead of
+   *   every collision pushing the rest of the column further down). The
+   *   focused card dominates its cluster, so it stays put at its anchor and
+   *   neighbours make way above and below.
+   * - Cards with no known position (anchor without a layout box, or before
+   *   the annotator's first report) drop into a normal-flow list below.
    */
   function alignCards(): void {
-    if (!iframe || !sidebar || alignedCards.size === 0) {
+    if (!iframe || !sidebar) return;
+    if (alignedCards.size === 0) {
       alignedZone.style.height = '0px';
       return;
     }
     const frameRect = iframe.getBoundingClientRect();
     const zoneRect = alignedZone.getBoundingClientRect();
+    const sidebarRect = sidebar.getBoundingClientRect();
     // zoneRect.top shifts with the sidebar's own scroll; add scrollTop back so
     // targets are in the zone's content space. Otherwise every sidebar scroll
     // re-pins the cards to the viewport and the scroll range grows forever.
     const zoneTop = zoneRect.top + sidebar.scrollTop;
+    // Room from the zone's top to the sidebar's bottom edge when the sidebar
+    // is unscrolled: the band cards are laid out in.
+    const viewportHeight = Math.max(240, sidebarRect.bottom - zoneRect.top - sidebar.scrollTop);
 
-    const entries = [...alignedCards.entries()].map(([id, card]) => {
-      const frameTop = framePositions.get(id);
-      const target =
-        frameTop === undefined ? Number.MAX_SAFE_INTEGER : frameRect.top + frameTop * currentScale - zoneTop;
-      return { card, target };
-    });
-    entries.sort((a, b) => a.target - b.target);
-
-    let cursor = 0;
-    let bottom = 0;
-    for (const entry of entries) {
-      const top = Math.max(entry.target === Number.MAX_SAFE_INTEGER ? cursor : entry.target, cursor, 0);
-      entry.card.style.top = `${top}px`;
-      cursor = top + entry.card.offsetHeight + 10;
-      bottom = Math.max(bottom, cursor);
+    // Cards with no position drop out of the zone into a normal-flow list.
+    const positioned: { id: string; card: HTMLElement; pos: AnchorPosition }[] = [];
+    for (const [id, card] of alignedCards) {
+      const pos = framePositions.get(id);
+      if (pos === undefined) {
+        if (card.parentElement !== unplacedZone) unplacedZone.appendChild(card);
+        card.classList.remove('aligned', 'stub', 'collapsed');
+        card.style.top = '';
+        delete card.dataset['offscreen'];
+        continue;
+      }
+      if (card.parentElement !== alignedZone) alignedZone.appendChild(card);
+      card.classList.add('aligned');
+      positioned.push({ id, card, pos });
     }
+
+    // The focused card must land on its anchor. When the cards packed around
+    // it are too tall for that, its nearest neighbours on the crowded side are
+    // demoted to edge stubs one at a time until it fits (Docs-style "make way").
+    const demoted = new Set<string>();
+    for (let attempt = 0; attempt < positioned.length; attempt++) {
+      const misfit = layoutPass(positioned, demoted, frameRect.top - zoneTop, frameRect.height, viewportHeight);
+      if (misfit === null) break;
+      demoted.add(misfit);
+    }
+  }
+
+  /**
+   * One layout pass. Returns the id of a neighbour that should be demoted to
+   * a stub so the focused card can reach its anchor, or null when the layout
+   * is final.
+   */
+  function layoutPass(
+    positioned: { id: string; card: HTMLElement; pos: AnchorPosition }[],
+    demoted: Set<string>,
+    frameOffset: number,
+    frameHeight: number,
+    viewportHeight: number,
+  ): string | null {
+    // An anchor is off-screen when it is outside the frame's visible extent
+    // (which can be shorter than the band in a small window) or past the band.
+    const aboveLimit = Math.min(0, frameOffset);
+    const belowLimit = Math.min(viewportHeight, frameOffset + frameHeight) - BOTTOM_EDGE_SLACK;
+    // 1. Classify: stub above / stub below / visible.
+    const placed: AlignEntry[] = [];
+    const above: AlignEntry[] = [];
+    const below: AlignEntry[] = [];
+    let pivot: AlignEntry | null = null;
+    const focusedPos = focusedCommentId ? framePositions.get(focusedCommentId) : undefined;
+    const pivotTarget = focusedPos ? frameOffset + focusedPos.top * currentScale : null;
+    for (const { id, card, pos } of positioned) {
+      const focused = id === focusedCommentId;
+      const target = frameOffset + pos.top * currentScale;
+      const entry: AlignEntry = { id, card, target, start: pos.start, height: 0, weight: focused ? FOCUS_WEIGHT : 1 };
+      let offscreen = target < aboveLimit ? above : target > belowLimit ? below : null;
+      if (offscreen === null && demoted.has(id) && pivotTarget !== null) {
+        offscreen = target < pivotTarget || (target === pivotTarget && pos.start < (focusedPos?.start ?? 0)) ? above : below;
+      }
+      // The focused card is never reduced to a stub: it clamps to the edge instead.
+      const stub = offscreen !== null && !focused;
+      card.dataset['offscreen'] = String(offscreen !== null && !demoted.has(id));
+      card.classList.toggle('stub', stub);
+      card.classList.toggle('collapsed', !focused);
+      (stub ? offscreen! : placed).push(entry);
+      if (focused) pivot = entry;
+    }
+    const byPosition = (a: AlignEntry, b: AlignEntry): number => a.target - b.target || a.start - b.start;
+    placed.sort(byPosition);
+    above.sort(byPosition);
+    below.sort(byPosition);
+
+    // 2. Measure after the class changes above (they alter heights). Reads
+    //    happen before any writes so the browser lays out once.
+    for (const entry of [...placed, ...above, ...below]) entry.height = entry.card.offsetHeight;
+
+    // 3. Edge piles. Stubs for anchors above the viewport stack down from the
+    //    top; those below stack up from the bottom (laid out after the visible
+    //    cards, which take priority for the space in between).
+    let cursor = 0;
+    for (const entry of above) {
+      entry.card.style.top = `${cursor}px`;
+      cursor += entry.height + STUB_GAP;
+    }
+    const bandTop = above.length > 0 ? cursor - STUB_GAP + CARD_GAP : 0;
+    const belowHeight = below.reduce((sum, entry) => sum + entry.height + STUB_GAP, 0) - STUB_GAP;
+    const bandBottom = below.length > 0 ? viewportHeight - belowHeight - CARD_GAP : viewportHeight;
+
+    // 4. Visible cards: greedy clustering. Each card starts as its own
+    //    cluster at its (band-clamped) target; whenever it would overlap the
+    //    cluster before it, the two merge and the merged cluster moves to the
+    //    weighted mean of its members' ideal tops.
+    interface Cluster {
+      items: AlignEntry[];
+      top: number;
+      height: number;
+    }
+    const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), Math.max(min, max));
+    const place = (items: AlignEntry[]): Cluster => {
+      // A cluster holding the focused card may run past the band's bottom
+      // (the zone grows and the sidebar scrolls) rather than being pushed up
+      // off its anchor; every other cluster stays inside the band.
+      const maxBottom = items.includes(pivot!) ? Number.POSITIVE_INFINITY : bandBottom;
+      let height = 0;
+      let weightSum = 0;
+      let idealSum = 0;
+      for (const item of items) {
+        // Where this cluster's top would have to be for `item` to sit exactly on its anchor.
+        const ideal = clamp(item.target, bandTop, maxBottom - item.height) - height;
+        idealSum += item.weight * ideal;
+        weightSum += item.weight;
+        height += item.height + CARD_GAP;
+      }
+      height -= CARD_GAP;
+      return { items, height, top: clamp(idealSum / weightSum, bandTop, maxBottom - height) };
+    };
+    const clusters: Cluster[] = [];
+    for (const entry of placed) {
+      let cluster = place([entry]);
+      while (clusters.length > 0) {
+        const previous = clusters[clusters.length - 1]!;
+        if (previous.top + previous.height + CARD_GAP <= cluster.top) break;
+        clusters.pop();
+        cluster = place([...previous.items, ...cluster.items]);
+      }
+      clusters.push(cluster);
+    }
+    let visibleBottom = bandTop;
+    let misfit: string | null = null;
+    for (const cluster of clusters) {
+      let top = cluster.top;
+      for (const item of cluster.items) {
+        item.card.style.top = `${top}px`;
+        // The focused card sits too low only when the cards above it in its
+        // cluster don't fit between the top pile and its anchor: the topmost
+        // one gives way (becomes a stub) and the pass is repeated.
+        if (item === pivot && top > Math.max(item.target, bandTop) + 1 && cluster.items.indexOf(item) > 0) {
+          misfit = cluster.items[0]!.id;
+        }
+        top += item.height + CARD_GAP;
+      }
+      visibleBottom = Math.max(visibleBottom, top - CARD_GAP);
+    }
+
+    // When the visible cards need more than the band, the bottom pile yields
+    // and the zone grows (the sidebar scrolls) rather than overlapping them.
+    cursor = below.length > 0 ? Math.max(viewportHeight - belowHeight, visibleBottom + CARD_GAP) : visibleBottom;
+    for (const entry of below) {
+      entry.card.style.top = `${cursor}px`;
+      cursor += entry.height + STUB_GAP;
+    }
+    const bottom = Math.max(viewportHeight, visibleBottom, below.length > 0 ? cursor - STUB_GAP : 0);
     alignedZone.style.height = `${bottom}px`;
+    return misfit;
+  }
+
+  /** Suppresses the card `top` transition while the artifact is being scrolled. */
+  let scrollingTimer: number | undefined;
+  function markScrolling(): void {
+    alignedZone.classList.add('scrolling');
+    if (scrollingTimer !== undefined) window.clearTimeout(scrollingTimer);
+    scrollingTimer = window.setTimeout(() => {
+      scrollingTimer = undefined;
+      alignedZone.classList.remove('scrolling');
+    }, 200);
   }
 
   // --- fit-to-width scaling ---------------------------------------------
@@ -712,7 +930,8 @@ function init(): void {
     },
     onPositions: (positions) => {
       framePositions.clear();
-      for (const p of positions) framePositions.set(p.id, p.top);
+      for (const p of positions) framePositions.set(p.id, p);
+      markScrolling();
       alignCards();
     },
     onCapabilities: (highlights) => {

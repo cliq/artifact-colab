@@ -10,7 +10,7 @@
 import { describeAnchor } from '../anchoring/anchor.js';
 import { buildTextIndex, domToTextOffset, textRangeToDomRange, type TextIndex } from '../anchoring/index.js';
 import { locateTextAnchor } from '../anchoring/text.js';
-import type { AnnotatorAnchorInput, FrameMessage, ParentMessage } from './protocol.js';
+import type { AnchorPosition, AnnotatorAnchorInput, FrameMessage, ParentMessage } from './protocol.js';
 
 const MAX_SELECTION_CHARS = 10_000;
 const RELOCATE_DEBOUNCE_MS = 200;
@@ -103,7 +103,14 @@ function start(): void {
 
   function reportPositions(): void {
     if (!token) return;
-    const positions = located.map((c) => ({ id: c.input.id, top: c.range.getBoundingClientRect().top }));
+    const positions: AnchorPosition[] = [];
+    for (const c of located) {
+      const rect = c.range.getBoundingClientRect();
+      // A collapsed rect means the anchor has no layout box right now (closed
+      // <details>, display:none); reporting y=0 would pin its card to the top.
+      if (rect.width === 0 && rect.height === 0) continue;
+      positions.push({ id: c.input.id, top: rect.top, start: c.start });
+    }
     post({ token, type: 'positions', positions });
   }
 
