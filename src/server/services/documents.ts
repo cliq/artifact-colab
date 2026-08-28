@@ -8,7 +8,7 @@
 import { and, eq, inArray, ne, notInArray } from 'drizzle-orm';
 
 import type { DB, DBOrTx } from '../db/index.js';
-import { assets, commentAnchorStates, comments, documents, teamMembers, versions, watches, type Document } from '../db/schema.js';
+import { assets, commentAnchorStates, commentReactions, comments, documents, teamMembers, versions, watches, type Document } from '../db/schema.js';
 
 export type DocumentVisibility = 'team' | 'public' | 'private';
 
@@ -64,6 +64,7 @@ export function deleteDocumentsWithin(tx: DBOrTx, docIds: string[]): void {
     .map((c) => c.id);
   if (commentIds.length > 0) {
     tx.delete(commentAnchorStates).where(inArray(commentAnchorStates.commentId, commentIds)).run();
+    tx.delete(commentReactions).where(inArray(commentReactions.commentId, commentIds)).run();
   }
   tx.delete(comments).where(inArray(comments.documentId, docIds)).run();
   tx.delete(watches).where(inArray(watches.documentId, docIds)).run();

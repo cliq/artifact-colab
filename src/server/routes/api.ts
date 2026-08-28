@@ -7,14 +7,15 @@
 
 import { randomBytes } from 'node:crypto';
 
-import { and, asc, eq, isNotNull, isNull, ne, or } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { z } from 'zod';
 
 import type { AppEnv } from '../context.js';
 import type { DB } from '../db/index.js';
-import { comments, commentAnchorStates, documents, teamMembers, users, versions, type Comment, type Document, type Version } from '../db/schema.js';
+import { comments, commentAnchorStates, commentReactions, documents, teamMembers, users, versions, type Comment, type Document, type Version } from '../db/schema.js';
+import { isReactionEmoji, REACTION_EMOJIS } from '../../shared/reactions.js';
 import { computeForComment, computeForCommentVersion } from '../services/anchorStates.js';
 import { assetsForDocument, relinkAssets, stripBaseHref } from '../services/assets.js';
 import { gravatarUrl } from '../services/gravatar.js';
@@ -160,11 +161,59 @@ function parseAnchorJson(raw: string): unknown {
   }
 }
 
+/** One emoji's reactions on a comment, grouped: who (display names) and whether the requesting viewer is among them. */
+export interface ReactionDTO {
+  emoji: string;
+  count: number;
+  /** Display names (profile name, else email), in reaction order. */
+  users: string[];
+  reactedByMe: boolean;
+}
+
 interface ThreadReplyDTO {
   id: string;
   body: string;
   author: AuthorDTO;
   createdAt: Date;
+  reactions: ReactionDTO[];
+}
+
+/**
+ * Reactions for a thread and its replies in one query, grouped per comment
+ * in palette order. `viewerId` marks the viewer's own reactions; omitted for
+ * exports and agents.
+ */
+function reactionsFor(db: DB, commentIds: string[], viewerId: string | undefined): Map<string, ReactionDTO[]> {
+  const grouped = new Map<string, ReactionDTO[]>();
+  if (commentIds.length === 0) return grouped;
+  const rows = db
+    .select({
+      commentId: commentReactions.commentId,
+      userId: commentReactions.userId,
+      emoji: commentReactions.emoji,
+      name: users.name,
+      email: users.email,
+    })
+    .from(commentReactions)
+    .innerJoin(users, eq(users.id, commentReactions.userId))
+    .where(inArray(commentReactions.commentId, commentIds))
+    .orderBy(asc(commentReactions.createdAt))
+    .all();
+  for (const row of rows) {
+    const list = grouped.get(row.commentId) ?? [];
+    let entry = list.find((r) => r.emoji === row.emoji);
+    if (!entry) {
+      entry = { emoji: row.emoji, count: 0, users: [], reactedByMe: false };
+      list.push(entry);
+    }
+    entry.count += 1;
+    entry.users.push(row.name?.trim() || row.email);
+    if (row.userId === viewerId) entry.reactedByMe = true;
+    grouped.set(row.commentId, list);
+  }
+  const order = (emoji: string): number => (REACTION_EMOJIS as readonly string[]).indexOf(emoji);
+  for (const list of grouped.values()) list.sort((a, b) => order(a.emoji) - order(b.emoji));
+  return grouped;
 }
 
 interface AnchorStateDTO {
@@ -185,11 +234,15 @@ export interface ThreadDTO {
   resolvedAt: Date | null;
   resolvedBy: string | null;
   anchorState: AnchorStateDTO | null;
+  reactions: ReactionDTO[];
   replies: ThreadReplyDTO[];
 }
 
-/** Build the full thread DTO for a top-level comment, including its anchor state for `versionId`. */
-export function buildThread(db: DB, comment: Comment, versionId: string | undefined, teamId: string): ThreadDTO {
+/**
+ * Build the full thread DTO for a top-level comment, including its anchor
+ * state for `versionId`. `viewerId` flags the viewer's own reactions.
+ */
+export function buildThread(db: DB, comment: Comment, versionId: string | undefined, teamId: string, viewerId?: string): ThreadDTO {
   const anchorStateRow = versionId
     ? db
         .select()
@@ -199,6 +252,7 @@ export function buildThread(db: DB, comment: Comment, versionId: string | undefi
     : undefined;
 
   const replyRows = db.select().from(comments).where(eq(comments.parentId, comment.id)).orderBy(asc(comments.createdAt)).all();
+  const reactions = reactionsFor(db, [comment.id, ...replyRows.map((reply) => reply.id)], viewerId);
 
   return {
     id: comment.id,
@@ -214,11 +268,13 @@ export function buildThread(db: DB, comment: Comment, versionId: string | undefi
     anchorState: anchorStateRow
       ? { state: anchorStateRow.state, start: anchorStateRow.start, end: anchorStateRow.end }
       : null,
+    reactions: reactions.get(comment.id) ?? [],
     replies: replyRows.map((reply) => ({
       id: reply.id,
       body: reply.body,
       author: authorFor(db, reply.authorId, teamId),
       createdAt: reply.createdAt,
+      reactions: reactions.get(reply.id) ?? [],
     })),
   };
 }
@@ -285,7 +341,7 @@ apiRoutes.get('/api/docs/:slug/comments', (c) => {
   if (!doc) return c.json({ error: 'not found' }, 404);
 
   const versionId = c.req.query('version') ?? doc.currentVersionId ?? undefined;
-  const threads = sortTopLevel(topLevelCommentsFor(db, doc.id)).map((row) => buildThread(db, row, versionId, doc.teamId));
+  const threads = sortTopLevel(topLevelCommentsFor(db, doc.id)).map((row) => buildThread(db, row, versionId, doc.teamId, user.id));
 
   return c.json({ comments: threads });
 });
@@ -342,7 +398,7 @@ apiRoutes.post('/api/docs/:slug/comments', async (c) => {
   const created = db.select().from(comments).where(eq(comments.id, id)).get();
   if (!created) return c.json({ error: 'internal error' }, 500);
 
-  return c.json(buildThread(db, created, version.id, doc.teamId), 201);
+  return c.json(buildThread(db, created, version.id, doc.teamId, user.id), 201);
 });
 
 apiRoutes.post('/api/comments/:id/replies', async (c) => {
@@ -401,7 +457,7 @@ apiRoutes.post('/api/comments/:id/resolve', (c) => {
   const updated = db.select().from(comments).where(eq(comments.id, found.comment.id)).get();
   if (!updated) return c.json({ error: 'internal error' }, 500);
 
-  return c.json(buildThread(db, updated, found.document.currentVersionId ?? undefined, found.document.teamId));
+  return c.json(buildThread(db, updated, found.document.currentVersionId ?? undefined, found.document.teamId, user.id));
 });
 
 apiRoutes.post('/api/comments/:id/reopen', (c) => {
@@ -415,7 +471,59 @@ apiRoutes.post('/api/comments/:id/reopen', (c) => {
   const updated = db.select().from(comments).where(eq(comments.id, found.comment.id)).get();
   if (!updated) return c.json({ error: 'internal error' }, 500);
 
-  return c.json(buildThread(db, updated, found.document.currentVersionId ?? undefined, found.document.teamId));
+  return c.json(buildThread(db, updated, found.document.currentVersionId ?? undefined, found.document.teamId, user.id));
+});
+
+/**
+ * Reaction toggles. PUT adds the viewer's reaction (idempotent), DELETE removes
+ * it. The target may be a top-level comment or a reply; the response is the
+ * refreshed thread either way, so the sidebar can swap it in.
+ */
+function reactionTarget(
+  db: DB,
+  commentId: string,
+  emoji: string,
+  userId: string,
+): { comment: Comment; topLevel: Comment; document: Document } | { error: string; status: 400 | 404 } {
+  if (!isReactionEmoji(emoji)) return { error: `unsupported reaction; use one of ${REACTION_EMOJIS.join(' ')}`, status: 400 };
+  const comment = db.select().from(comments).where(eq(comments.id, commentId)).get();
+  if (!comment) return { error: 'not found', status: 404 };
+  const document = findDocumentForViewer(db, comment.documentId, userId)?.document;
+  if (!document) return { error: 'not found', status: 404 };
+  const topLevel = comment.parentId ? db.select().from(comments).where(eq(comments.id, comment.parentId)).get() : comment;
+  if (!topLevel) return { error: 'not found', status: 404 };
+  return { comment, topLevel, document };
+}
+
+apiRoutes.put('/api/comments/:id/reactions/:emoji', (c) => {
+  const db = c.get('db');
+  const user = c.get('user');
+  const target = reactionTarget(db, c.req.param('id'), c.req.param('emoji'), user.id);
+  if ('error' in target) return c.json({ error: target.error }, target.status);
+
+  db.insert(commentReactions)
+    .values({ commentId: target.comment.id, userId: user.id, emoji: c.req.param('emoji'), createdAt: new Date() })
+    .onConflictDoNothing()
+    .run();
+  return c.json(buildThread(db, target.topLevel, target.document.currentVersionId ?? undefined, target.document.teamId, user.id));
+});
+
+apiRoutes.delete('/api/comments/:id/reactions/:emoji', (c) => {
+  const db = c.get('db');
+  const user = c.get('user');
+  const target = reactionTarget(db, c.req.param('id'), c.req.param('emoji'), user.id);
+  if ('error' in target) return c.json({ error: target.error }, target.status);
+
+  db.delete(commentReactions)
+    .where(
+      and(
+        eq(commentReactions.commentId, target.comment.id),
+        eq(commentReactions.userId, user.id),
+        eq(commentReactions.emoji, c.req.param('emoji')),
+      ),
+    )
+    .run();
+  return c.json(buildThread(db, target.topLevel, target.document.currentVersionId ?? undefined, target.document.teamId, user.id));
 });
 
 /**
@@ -478,13 +586,15 @@ function commentsMarkdown(db: DB, baseUrl: string, doc: Document): string {
     `Anchor states (anchored/ambiguous/orphaned) refer to that version.`,
     '',
   ];
+  const reactionNote = (reactions: ReactionDTO[]): string =>
+    reactions.length === 0 ? '' : ` [${reactions.map((r) => `${r.emoji} ${r.count}`).join(' · ')}]`;
   const renderSection = (title: string, items: ThreadDTO[]): void => {
     lines.push(`## ${title}`, '');
     for (const thread of items) {
       const state = thread.anchorState?.state ?? 'orphaned';
-      lines.push(`- **${thread.author.email}** on "${thread.quotedText}" (${state}): ${thread.body}`);
+      lines.push(`- **${thread.author.email}** on "${thread.quotedText}" (${state}): ${thread.body}${reactionNote(thread.reactions)}`);
       for (const reply of thread.replies) {
-        lines.push(`  - **${reply.author.email}**: ${reply.body}`);
+        lines.push(`  - **${reply.author.email}**: ${reply.body}${reactionNote(reply.reactions)}`);
       }
     }
     lines.push('');

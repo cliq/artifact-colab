@@ -283,6 +283,30 @@ export const commentAnchorStates = sqliteTable(
 );
 
 export type CommentAnchorState = typeof commentAnchorStates.$inferSelect;
+
+/**
+ * Emoji reactions on comments and replies: one row per (comment, user, emoji),
+ * toggled on and off. `emoji` is restricted to the shared palette by the API.
+ */
+export const commentReactions = sqliteTable(
+  'comment_reactions',
+  {
+    commentId: text('comment_id')
+      .notNull()
+      .references(() => comments.id),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    emoji: text('emoji').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.commentId, table.userId, table.emoji] }),
+    index('comment_reactions_comment_id_idx').on(table.commentId),
+  ],
+);
+
+export type CommentReaction = typeof commentReactions.$inferSelect;
 export type NewCommentAnchorState = typeof commentAnchorStates.$inferInsert;
 
 export const watches = sqliteTable(

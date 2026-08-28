@@ -6,6 +6,7 @@
  */
 
 import type { AnchorPosition, AnchorState, AnnotatorAnchorInput } from '../annotator/protocol.js';
+import { REACTION_EMOJIS } from '../shared/reactions.js';
 import type { TextAnchor } from '../anchoring/text.js';
 import { AnnotatorBridge } from './bridge.js';
 
@@ -29,11 +30,19 @@ interface AuthorDTO {
   isGuest: boolean;
 }
 
+interface ReactionDTO {
+  emoji: string;
+  count: number;
+  users: string[];
+  reactedByMe: boolean;
+}
+
 interface ReplyDTO {
   id: string;
   body: string;
   author: AuthorDTO;
   createdAt: string;
+  reactions: ReactionDTO[];
 }
 
 interface AnchorStateDTO {
@@ -54,6 +63,7 @@ interface ThreadDTO {
   resolvedAt: string | null;
   resolvedBy: string | null;
   anchorState: AnchorStateDTO | null;
+  reactions: ReactionDTO[];
   replies: ReplyDTO[];
 }
 
@@ -95,6 +105,19 @@ const SIDEBAR_CSS = `
 .thread-meta .author { font-weight: 600; color: var(--color-ink); }
 .thread-meta .avatar { width: 16px; height: 16px; border-radius: 50%; flex: none; }
 .thread-body { margin-bottom: 6px; white-space: pre-wrap; word-break: break-word; }
+.reactions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 4px 0 2px; }
+.reaction-chip { font: inherit; font-size: 12px; line-height: 1; padding: 3px 7px; border: 1px solid var(--color-border); border-radius: var(--radius-pill); background: var(--color-surface); color: var(--color-ink-2); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.reaction-chip:hover { border-color: var(--color-rule-2); }
+.reaction-chip.mine { border-color: var(--color-accent-bright); background: color-mix(in srgb, var(--color-accent-bright) 12%, var(--color-surface)); }
+.reaction-chip .reaction-count { font-family: var(--font-mono); font-size: 11px; }
+.reaction-add { font: inherit; font-size: 12px; line-height: 1; width: 24px; height: 22px; padding: 0; border: 1px dashed var(--color-border); border-radius: var(--radius-pill); background: transparent; color: var(--color-muted); cursor: pointer; }
+.reaction-add:hover { color: var(--color-accent); border-color: var(--color-rule-2); }
+.reaction-palette { display: none; gap: 2px; padding: 3px; border: 1px solid var(--color-border); border-radius: var(--radius-pill); background: var(--color-surface); box-shadow: var(--shadow-whisper); }
+.reaction-palette.open { display: inline-flex; }
+.reaction-palette button { font: inherit; font-size: 15px; line-height: 1; padding: 3px 5px; border: none; border-radius: var(--radius-pill); background: transparent; cursor: pointer; }
+.reaction-palette button:hover { background: var(--color-paper-2); }
+/* Collapsed cards and stubs keep the chips (they're signal) but drop the picker. */
+.thread-card.collapsed .reaction-add, .thread-card.collapsed .reaction-palette, .thread-card.stub .reactions { display: none; }
 .replies { margin: 6px 0 6px 8px; border-left: 1px solid var(--color-border); padding-left: 8px; }
 .reply { margin-bottom: 6px; }
 .reply-body { white-space: pre-wrap; word-break: break-word; }
@@ -340,13 +363,72 @@ function init(): void {
   }
 
   // --- networking -------------------------------------------------------
-  async function postJson(path: string, body?: unknown): Promise<{ ok: boolean; status: number }> {
+  async function sendJson(method: 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<{ ok: boolean; status: number }> {
     const res = await fetch(path, {
-      method: 'POST',
+      method,
       headers: { 'content-type': 'application/json', 'x-csrf-token': data.csrfToken },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     return { ok: res.ok, status: res.status };
+  }
+
+  function postJson(path: string, body?: unknown): Promise<{ ok: boolean; status: number }> {
+    return sendJson('POST', path, body);
+  }
+
+  /**
+   * Reaction chips for a comment or reply, plus a "+" that opens the palette.
+   * Toggling goes straight to the server; the poll response then re-renders.
+   */
+  function reactionsBar(commentId: string, reactions: ReactionDTO[]): HTMLElement {
+    const bar = el('div', { className: 'reactions' });
+    async function toggle(emoji: string, mine: boolean): Promise<void> {
+      const res = await sendJson(mine ? 'DELETE' : 'PUT', `/api/comments/${commentId}/reactions/${encodeURIComponent(emoji)}`);
+      if (res.ok) await fetchComments();
+    }
+    for (const reaction of reactions) {
+      const chip = el(
+        'button',
+        {
+          className: `reaction-chip${reaction.reactedByMe ? ' mine' : ''}`,
+          attrs: { type: 'button', title: reaction.users.join(', ') },
+          onClick: (e) => {
+            e.stopPropagation();
+            void toggle(reaction.emoji, reaction.reactedByMe);
+          },
+        },
+        [reaction.emoji, el('span', { className: 'reaction-count', text: String(reaction.count) })],
+      );
+      bar.appendChild(chip);
+    }
+    const palette = el('div', { className: 'reaction-palette' });
+    for (const emoji of REACTION_EMOJIS) {
+      const mine = reactions.some((r) => r.emoji === emoji && r.reactedByMe);
+      palette.appendChild(
+        el('button', {
+          text: emoji,
+          attrs: { type: 'button', title: mine ? 'Remove reaction' : 'React' },
+          onClick: (e) => {
+            e.stopPropagation();
+            palette.classList.remove('open');
+            void toggle(emoji, mine);
+          },
+        }),
+      );
+    }
+    bar.appendChild(
+      el('button', {
+        className: 'reaction-add',
+        text: '+',
+        attrs: { type: 'button', title: 'Add reaction', 'aria-label': 'Add reaction' },
+        onClick: (e) => {
+          e.stopPropagation();
+          palette.classList.toggle('open');
+        },
+      }),
+    );
+    bar.appendChild(palette);
+    return bar;
   }
 
   function sendAnchorsToFrame(): void {
@@ -438,6 +520,7 @@ function init(): void {
     const meta = authorMeta(thread.author, thread.createdAt);
 
     const body = el('div', { className: 'thread-body', text: thread.body });
+    const reactions = reactionsBar(thread.id, thread.reactions);
 
     const repliesEl = el('div', { className: 'replies' });
     for (const reply of thread.replies) {
@@ -445,6 +528,7 @@ function init(): void {
         el('div', { className: 'reply' }, [
           authorMeta(reply.author, reply.createdAt),
           el('div', { className: 'reply-body', text: reply.body }),
+          reactionsBar(reply.id, reply.reactions),
         ]),
       );
     }
@@ -537,7 +621,7 @@ function init(): void {
           focusThread(thread.id);
         },
       },
-      [badges, quote, meta, body, collapsedInfo, repliesEl, replyForm, actions],
+      [badges, quote, meta, body, reactions, collapsedInfo, repliesEl, replyForm, actions],
     );
     return card;
   }

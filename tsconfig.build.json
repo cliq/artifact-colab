@@ -5,5 +5,5 @@
     "rootDir": "./src",
     "outDir": "dist/server"
   },
-  "include": ["src/server", "src/anchoring"]
+  "include": ["src/server", "src/anchoring", "src/shared"]
 }

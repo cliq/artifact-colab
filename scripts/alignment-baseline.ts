@@ -19,7 +19,7 @@ import { dirname } from 'node:path';
 
 import { describeTextAnchor } from '../src/anchoring/text.js';
 import { createSession, getOrCreateUser } from '../src/server/auth.js';
-import { comments, documents, openDb, teamDomains, teams, versions } from '../src/server/db/index.js';
+import { commentReactions, comments, documents, openDb, teamDomains, teams, versions } from '../src/server/db/index.js';
 import { indexVersionHtml } from '../src/server/services/anchorStates.js';
 
 const SLUG = 'alignment-baseline';
@@ -69,6 +69,7 @@ db.insert(documents)
   .values({ id: SLUG, title: 'Alignment Baseline', teamId: 'team-example', createdBy: alice.id, createdAt: now })
   .onConflictDoNothing()
   .run();
+db.delete(commentReactions).run();
 db.delete(comments).where((await import('drizzle-orm')).eq(comments.documentId, SLUG)).run();
 db.delete(versions).where((await import('drizzle-orm')).eq(versions.documentId, SLUG)).run();
 db.insert(versions).values({ id: 'ver-baseline', documentId: SLUG, number: 1, html: HTML, publishedAt: now, publishedBy: alice.id }).run();
@@ -141,6 +142,17 @@ comment('Unique marker S6A', 'Far below the fold.', { author: bob, replies: 1 })
 comment('The closing line is the last thing in the document.', 'Comment on the very last line.');
 comment('This text no longer exists anywhere', 'Orphaned comment — its text was removed.', { orphan: true });
 comment('Unique marker S2B', 'Already resolved.', { status: 'resolved' });
+
+// A few reactions, so the chips show up in the screenshots.
+const react = (commentId: string, user: typeof alice, emoji: string): void => {
+  db.insert(commentReactions).values({ commentId, userId: user.id, emoji, createdAt: now }).run();
+};
+react('c01', bob, '👍');
+react('c03', bob, '👍');
+react('c03', alice, '👍');
+react('c03', bob, '👀');
+react('c07', alice, '🎉');
+react('c07-r1', alice, '✅');
 
 const { token } = createSession(db, alice.id, new Date());
 sqlite.close();
