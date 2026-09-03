@@ -30,6 +30,7 @@ import {
   getUserTeams,
   inviteMember,
   isInstanceAdmin,
+  listTeamlessUsers,
   promoteInstanceAdmin,
   removeMember,
 } from '../../src/server/services/teams.js';
@@ -316,5 +317,31 @@ describe('instance admin guardrails', () => {
   test('promoting an email without an account fails', () => {
     const db = freshDb();
     expect(promoteInstanceAdmin(db, 'ghost@nowhere.net')).toBeUndefined();
+  });
+});
+
+describe('listTeamlessUsers', () => {
+  test('lists only accounts with no membership, sorted by email', () => {
+    const db = freshDb();
+    seedTeamWithDomain(db, 'cliq', 'cliq.dev');
+    getOrCreateUser(db, 'member@cliq.dev', NOW);
+    getOrCreateUser(db, 'zed@nowhere.net', NOW);
+    getOrCreateUser(db, 'amy@nowhere.net', NOW);
+
+    expect(listTeamlessUsers(db).map((u) => u.email)).toEqual(['amy@nowhere.net', 'zed@nowhere.net']);
+  });
+
+  test('a user removed from their only team becomes teamless; one on two teams stays off the list', () => {
+    const db = freshDb();
+    const teamId = seedTeamWithDomain(db, 'cliq', 'cliq.dev');
+    const other = createTeam(db, 'Other', NOW);
+    const single = getOrCreateUser(db, 'single@cliq.dev', NOW);
+    const double = getOrCreateUser(db, 'double@cliq.dev', NOW);
+    inviteMember(db, other.id, double.email, 'member', double, NOW);
+
+    expect(listTeamlessUsers(db)).toEqual([]);
+    removeMember(db, teamId, single.id, NOW);
+    removeMember(db, teamId, double.id, NOW);
+    expect(listTeamlessUsers(db).map((u) => u.email)).toEqual(['single@cliq.dev']);
   });
 });

@@ -178,9 +178,11 @@ export const AdminPage: FC<{
   admins: InstanceAdminRow[];
   /** Env-listed admin emails without an account yet — shown so the list is complete. */
   pendingEnvAdmins: string[];
+  /** Accounts with no team membership at all — they see an empty workspace until someone invites them. */
+  teamlessUsers: User[];
   error?: string;
   notice?: string;
-}> = ({ user, csrfToken, teams, admins, pendingEnvAdmins, error, notice }) => (
+}> = ({ user, csrfToken, teams, admins, pendingEnvAdmins, teamlessUsers, error, notice }) => (
   <Layout title="Admin - Artifact Colab" user={user} csrfToken={csrfToken} isInstanceAdmin>
     <h1>Admin</h1>
     <Feedback error={error} notice={notice} />
@@ -280,6 +282,37 @@ export const AdminPage: FC<{
         <p class="muted small">The email must already have an account.</p>
       </form>
     </section>
+
+    {teamlessUsers.length > 0 && (
+      <section class="settings-section">
+        <h2>Users without a team</h2>
+        <p class="muted">
+          Accounts that aren't on any team. They can sign in but see nothing until a team admin invites them by email.
+        </p>
+        <div class="card table-card">
+          <table>
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Name</th>
+                <th>Signed up</th>
+              </tr>
+            </thead>
+            <tbody>
+              {teamlessUsers.map((u) => (
+                <tr>
+                  <td>{u.email}</td>
+                  <td class="muted">{u.name ?? '—'}</td>
+                  <td class="muted">
+                    <LocalTime date={u.createdAt} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    )}
   </Layout>
 );
 

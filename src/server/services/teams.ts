@@ -14,7 +14,7 @@
 
 import { randomBytes } from 'node:crypto';
 
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 
 import type { Config } from '../config.js';
 import type { DB, DBOrTx } from '../db/index.js';
@@ -410,4 +410,20 @@ export function promoteInstanceAdmin(db: DB, email: string): User | undefined {
   if (!user) return undefined;
   db.update(users).set({ isInstanceAdmin: true }).where(eq(users.id, user.id)).run();
   return { ...user, isInstanceAdmin: true };
+}
+
+/**
+ * Accounts that belong to no team at all — people who signed in (e.g. via an
+ * invite that was later cancelled, or a team that was deleted) and now see an
+ * empty workspace. Surfaced on /admin so instance admins can spot them.
+ */
+export function listTeamlessUsers(db: DB): User[] {
+  return db
+    .select({ user: users })
+    .from(users)
+    .leftJoin(teamMembers, eq(teamMembers.userId, users.id))
+    .where(isNull(teamMembers.userId))
+    .orderBy(asc(users.email))
+    .all()
+    .map((row) => row.user);
 }

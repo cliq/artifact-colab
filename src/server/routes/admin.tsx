@@ -37,6 +37,7 @@ import {
   inviteMember,
   isInstanceAdmin,
   isTeamAdmin,
+  listTeamlessUsers,
   promoteInstanceAdmin,
   removeMember,
   removeTeamDomain,
@@ -174,6 +175,7 @@ adminRoutes.get('/admin', (c) => {
       teams={teamRows}
       admins={admins}
       pendingEnvAdmins={pendingEnvAdmins}
+      teamlessUsers={listTeamlessUsers(db)}
       error={c.req.query('error')}
       notice={c.req.query('notice')}
     />,
