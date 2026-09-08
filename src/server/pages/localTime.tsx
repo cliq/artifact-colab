@@ -6,8 +6,8 @@
 
 import type { FC } from 'hono/jsx';
 
-export const LocalTime: FC<{ date: Date }> = ({ date }) => (
-  <time datetime={date.toISOString()}>{formatUtc(date)}</time>
+export const LocalTime: FC<{ date: Date; split?: boolean }> = ({ date, split }) => (
+  <time datetime={date.toISOString()} data-split={split ? "true" : undefined}>{formatUtc(date)}</time>
 );
 
 /** e.g. "2026-08-08 14:32 UTC" — only shown when JS is unavailable. */

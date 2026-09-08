@@ -230,6 +230,45 @@ main {
   padding: 2rem 1.5rem;
 }
 
+main.documents-page {
+  max-width: 1200px;
+}
+
+.documents-table-scroll {
+  overflow-x: auto;
+}
+
+.documents-table {
+  min-width: 720px;
+}
+
+.documents-table th:first-child {
+  width: 100%;
+  min-width: 300px;
+}
+
+.documents-table th:not(:first-child) {
+  white-space: nowrap;
+}
+
+.document-title {
+  display: block;
+  font-weight: 500;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.document-owner {
+  margin-top: 0.25rem;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.documents-table time[data-split] span {
+  display: block;
+  white-space: nowrap;
+}
+
 main.wide {
   max-width: 960px;
 }

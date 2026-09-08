@@ -64,11 +64,11 @@ export interface DocumentsPageProps {
 }
 
 const DocumentsTable: FC<{ documents: DocumentListRow[] }> = ({ documents }) => (
-  <table>
+  <div class="documents-table-scroll">
+  <table class="documents-table">
     <thead>
       <tr>
-        <th>Title</th>
-        <th>Owner</th>
+        <th>Artifact</th>
         <th>Sharing</th>
         <th>Versions</th>
         <th>Open comments</th>
@@ -79,21 +79,22 @@ const DocumentsTable: FC<{ documents: DocumentListRow[] }> = ({ documents }) => 
       {documents.map((doc) => (
         <tr>
           <td>
-            <a href={`/d/${doc.id}`}>{doc.title}</a>
-          </td>
-          <td class="muted" title={doc.ownerEmail ?? undefined}>
-            {doc.ownerName}
+            <a class="document-title" href={`/d/${doc.id}`}>{doc.title}</a>
+            <div class="document-owner muted" title={doc.ownerEmail ?? undefined}>
+              {doc.ownerName}
+            </div>
           </td>
           <td>
             <ShareBadge visibility={doc.visibility} />
           </td>
           <td>{doc.versionCount}</td>
           <td>{doc.openCommentCount}</td>
-          <td class="muted">{doc.lastPublishedAt ? <LocalTime date={doc.lastPublishedAt} /> : '—'}</td>
+          <td class="muted">{doc.lastPublishedAt ? <LocalTime date={doc.lastPublishedAt} split /> : '—'}</td>
         </tr>
       ))}
     </tbody>
   </table>
+  </div>
 );
 
 const EmptyTeamNote: FC = () => (
@@ -145,7 +146,7 @@ const SharedSection: FC<{ documents: DocumentListRow[] }> = ({ documents }) => (
 
 export const DocumentsPage: FC<DocumentsPageProps> = ({ user, csrfToken, groups, shared, isInstanceAdmin, wizard }) => {
   return (
-    <Layout title="Documents - Artifact Colab" user={user} csrfToken={csrfToken} isInstanceAdmin={isInstanceAdmin}>
+    <Layout mainClass="documents-page" title="Documents - Artifact Colab" user={user} csrfToken={csrfToken} isInstanceAdmin={isInstanceAdmin}>
       {groups.length === 0 ? (
         <>
           <h1>{wizard ? 'Welcome' : 'Documents'}</h1>

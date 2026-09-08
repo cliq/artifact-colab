@@ -20,6 +20,14 @@ document.querySelectorAll('time[datetime]').forEach(function (el) {
   var date = new Date(el.getAttribute('datetime'));
   if (isNaN(date)) return;
   el.title = el.textContent;
+  if (el.hasAttribute('data-split')) {
+    var day = document.createElement('span');
+    day.textContent = date.toLocaleDateString(undefined, { dateStyle: 'medium' });
+    var time = document.createElement('span');
+    time.textContent = date.toLocaleTimeString(undefined, { timeStyle: 'short' });
+    el.replaceChildren(day, document.createTextNode(' '), time);
+    return;
+  }
   el.textContent = date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 });
 `;
@@ -30,10 +38,11 @@ export interface LayoutProps {
   csrfToken: string;
   /** Shows the Admin link in the settings menu. Pages that don't know simply omit it. */
   isInstanceAdmin?: boolean;
+  mainClass?: string;
   children?: unknown;
 }
 
-export const Layout: FC<LayoutProps> = ({ title, user, csrfToken, isInstanceAdmin, children }) => {
+export const Layout: FC<LayoutProps> = ({ title, user, csrfToken, isInstanceAdmin, mainClass, children }) => {
   return (
     <html lang="en">
       <head>
@@ -76,7 +85,7 @@ export const Layout: FC<LayoutProps> = ({ title, user, csrfToken, isInstanceAdmi
             )}
           </div>
         </header>
-        <main>{children}</main>
+        <main class={mainClass}>{children}</main>
         <script dangerouslySetInnerHTML={{ __html: menuScript }}></script>
       </body>
     </html>
