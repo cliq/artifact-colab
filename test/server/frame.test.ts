@@ -47,7 +47,7 @@ describe('GET /d/:slug/frame', () => {
 
     const csp = res.headers.get('content-security-policy') ?? '';
     const directives = csp.split(';').map((d) => d.trim());
-    expect(directives).toContain('sandbox allow-scripts');
+    expect(directives).toContain('sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox');
     expect(directives).toContain(`default-src 'none'`);
   });
 

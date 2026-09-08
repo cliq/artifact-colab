@@ -7,10 +7,14 @@
  * Browser-only by design; covered by the Playwright e2e, not unit tests.
  */
 
+import { installExternalLinks } from './links.js';
+
 import { describeAnchor } from '../anchoring/anchor.js';
 import { buildTextIndex, domToTextOffset, textRangeToDomRange, type TextIndex } from '../anchoring/index.js';
 import { locateTextAnchor } from '../anchoring/text.js';
 import type { AnchorPosition, AnnotatorAnchorInput, FrameMessage, ParentMessage } from './protocol.js';
+
+installExternalLinks(document);
 
 const MAX_SELECTION_CHARS = 10_000;
 const RELOCATE_DEBOUNCE_MS = 200;

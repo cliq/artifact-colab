@@ -273,7 +273,7 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
           <div class="frame-wrap" id="frame-wrap">
             <iframe
               id="artifact-frame"
-              sandbox="allow-scripts"
+              sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
               src={`/d/${document.id}/frame?version=${shownVersion.number}`}
               title={document.title}
             ></iframe>

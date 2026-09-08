@@ -1,6 +1,6 @@
 /**
  * Serves artifact HTML inside the sandboxed iframe, with the annotator
- * runtime inlined. The frame has an opaque origin (sandbox="allow-scripts"),
+ * runtime inlined. The frame has an opaque origin (sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"),
  * so the script cannot be loaded by URL — it must be inline. Isolation comes
  * from the sandbox — declared both by the parent's iframe attribute and by
  * this response's own CSP `sandbox` directive, so a direct visit to the frame
@@ -47,7 +47,7 @@ function frameCsp(cdnAllowlist: string[]): string {
     // this, the sandbox exists only as the viewer page's iframe attribute,
     // and a shared direct link would run publisher HTML on the app origin
     // (able to read the CSRF cookie and call the session-authed API).
-    `sandbox allow-scripts`,
+    `sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox`,
     `default-src 'none'`,
     `script-src 'unsafe-inline' 'unsafe-eval'${hosts ? ` ${hosts}` : ''}`,
     `style-src 'unsafe-inline'${hosts ? ` ${hosts}` : ''}`,
