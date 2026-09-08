@@ -21,6 +21,7 @@ import { createApp } from '../../src/server/app.js';
 import { createSession, getOrCreateUser } from '../../src/server/auth.js';
 import type { AppEnv } from '../../src/server/context.js';
 import { documents, openDb, teams, type DB } from '../../src/server/db/index.js';
+import { publishArtifact } from '../../src/server/services/publish.js';
 import { getTeamRole, getUserTeams, removeMember, setTeamRole } from '../../src/server/services/teams.js';
 import { baseTestConfig, seedTeamWithDomain } from './teamTestUtils.js';
 
@@ -200,6 +201,37 @@ describe('admin surfaces', () => {
       const res = await post(`/teams/team-1/settings/members/${guest.id}/remove`, teamAdminCookie, {});
       expect(res.status).toBe(302);
       expect(getUserTeams(db, guest.id)).toHaveLength(0);
+    });
+  });
+
+  describe('usage analytics', () => {
+    beforeAll(() => {
+      const author = getOrCreateUser(db, 'dev@cliq.dev', new Date());
+      const html = `<body>${'x'.repeat(2000)}</body>`;
+      const outcome = publishArtifact(db, baseTestConfig(), author, 'team-1', {
+        title: 'Sized Artifact',
+        html,
+        assets: [{ name: 'pixel.png', mime: 'image/png', data: Buffer.alloc(500) }],
+      });
+      expect(outcome.ok).toBe(true);
+    });
+
+    test('/admin shows instance totals and per-team documents, storage, and last activity', async () => {
+      const html = await (await app.request('/admin', { headers: { cookie: rootCookie } })).text();
+      expect(html).toContain('Overview');
+      expect(html).toContain('Database file');
+      expect(html).toContain('<th>Storage</th>');
+      expect(html).toContain('<th>Last activity</th>');
+      // 2013 bytes of HTML + 500 bytes of asset.
+      expect(html).toContain('2.5 KB');
+    });
+
+    test('the team page has a usage section with counts and a breakdown', async () => {
+      const html = await (await app.request('/admin/teams/team-1', { headers: { cookie: rootCookie } })).text();
+      expect(html).toContain('Usage');
+      expect(html).toContain('Last publish');
+      expect(html).toContain('Last agent access');
+      expect(html).toContain('2.0 KB of HTML and Markdown, 500 B of assets');
     });
   });
 

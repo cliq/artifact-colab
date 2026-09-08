@@ -8,6 +8,7 @@
 import type { FC } from 'hono/jsx';
 
 import type { Team, TeamDomain, TeamInvite, User } from '../db/schema.js';
+import { formatBytes, type InstanceStats, type TeamStats } from '../services/teamStats.js';
 import { Layout } from './layout.js';
 import { LocalTime } from './localTime.js';
 
@@ -163,7 +164,84 @@ export interface AdminTeamListRow {
   team: Team;
   memberCount: number;
   domains: string[];
+  stats: TeamStats;
 }
+
+/** A timestamp cell, or a muted dash when the team never did the thing. */
+const MaybeTime: FC<{ date: Date | null }> = ({ date }) => (date ? <LocalTime date={date} /> : <span class="muted">—</span>);
+
+const Stat: FC<{ label: string; value: string | number; hint?: string }> = ({ label, value, hint }) => (
+  <div class="stat" title={hint}>
+    <div class="stat-value">{value}</div>
+    <div class="stat-label">{label}</div>
+  </div>
+);
+
+/** Instance-wide totals shown above the team table on /admin. */
+const InstanceOverview: FC<{ instance: InstanceStats }> = ({ instance }) => (
+  <div class="stat-grid">
+    <Stat label="Teams" value={instance.teams} />
+    <Stat label="Users" value={instance.users} />
+    <Stat label="Documents" value={instance.documents} />
+    <Stat label="Content" value={formatBytes(instance.storageBytes)} hint="Published HTML, Markdown source, and uploaded assets" />
+    <Stat label="Database file" value={formatBytes(instance.databaseBytes)} hint="SQLite file size, including indexes, comments, and free pages" />
+  </div>
+);
+
+/** Per-team usage on /admin/teams/:id. */
+const UsageSection: FC<{ stats: TeamStats }> = ({ stats }) => (
+  <section class="settings-section">
+    <h2>Usage</h2>
+    <div class="stat-grid">
+      <Stat
+        label="Documents"
+        value={stats.documents}
+        hint={`${stats.teamDocuments} team-only, ${stats.publicDocuments} public, ${stats.privateDocuments} private`}
+      />
+      <Stat label="Versions" value={stats.versions} />
+      <Stat label="Comments" value={stats.comments} />
+      <Stat label="Assets" value={stats.assets} />
+      <Stat
+        label="Storage"
+        value={formatBytes(stats.storageBytes)}
+        hint={`${formatBytes(stats.contentBytes)} of HTML and Markdown, ${formatBytes(stats.assetBytes)} of assets`}
+      />
+    </div>
+    <div class="card table-card" style="margin-top: 1rem">
+      <table>
+        <tbody>
+          <tr>
+            <td>Documents by sharing</td>
+            <td class="muted">
+              {stats.teamDocuments} team-only · {stats.publicDocuments} public · {stats.privateDocuments} private
+            </td>
+          </tr>
+          <tr>
+            <td>Last publish</td>
+            <td class="muted">
+              <MaybeTime date={stats.lastPublishedAt} />
+            </td>
+          </tr>
+          <tr>
+            <td>Last comment</td>
+            <td class="muted">
+              <MaybeTime date={stats.lastCommentAt} />
+            </td>
+          </tr>
+          <tr>
+            <td>Last agent access</td>
+            <td class="muted">
+              <MaybeTime date={stats.lastAgentAccessAt} />
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted small" style="margin-top: 0.5rem">
+      Activity covers publishes, comments, and MCP token use. Page views are not tracked.
+    </p>
+  </section>
+);
 
 export interface InstanceAdminRow {
   user: User;
@@ -175,6 +253,7 @@ export const AdminPage: FC<{
   user: User;
   csrfToken: string;
   teams: AdminTeamListRow[];
+  instance: InstanceStats;
   admins: InstanceAdminRow[];
   /** Env-listed admin emails without an account yet — shown so the list is complete. */
   pendingEnvAdmins: string[];
@@ -182,10 +261,15 @@ export const AdminPage: FC<{
   teamlessUsers: User[];
   error?: string;
   notice?: string;
-}> = ({ user, csrfToken, teams, admins, pendingEnvAdmins, teamlessUsers, error, notice }) => (
+}> = ({ user, csrfToken, teams, instance, admins, pendingEnvAdmins, teamlessUsers, error, notice }) => (
   <Layout title="Admin - Artifact Colab" user={user} csrfToken={csrfToken} isInstanceAdmin>
     <h1>Admin</h1>
     <Feedback error={error} notice={notice} />
+
+    <section class="settings-section">
+      <h2>Overview</h2>
+      <InstanceOverview instance={instance} />
+    </section>
 
     <section class="settings-section">
       <h2>Teams</h2>
@@ -198,6 +282,9 @@ export const AdminPage: FC<{
               <tr>
                 <th>Name</th>
                 <th>Members</th>
+                <th>Documents</th>
+                <th>Storage</th>
+                <th>Last activity</th>
                 <th>Auto-join domains</th>
               </tr>
             </thead>
@@ -208,6 +295,13 @@ export const AdminPage: FC<{
                     <a href={`/admin/teams/${row.team.id}`}>{row.team.name}</a>
                   </td>
                   <td>{row.memberCount}</td>
+                  <td title={`${row.stats.versions} versions, ${row.stats.comments} comments`}>{row.stats.documents}</td>
+                  <td title={`${formatBytes(row.stats.contentBytes)} of HTML and Markdown, ${formatBytes(row.stats.assetBytes)} of assets`}>
+                    {formatBytes(row.stats.storageBytes)}
+                  </td>
+                  <td class="muted">
+                    <MaybeTime date={row.stats.lastActivityAt} />
+                  </td>
                   <td class="muted">{row.domains.length > 0 ? row.domains.join(', ') : '—'}</td>
                 </tr>
               ))}
@@ -324,9 +418,10 @@ export const AdminTeamPage: FC<{
   members: MemberRow[];
   invites: TeamInvite[];
   orphans: OrphanedDocRow[];
+  stats: TeamStats;
   error?: string;
   notice?: string;
-}> = ({ user, csrfToken, team, domains, members, invites, orphans, error, notice }) => {
+}> = ({ user, csrfToken, team, domains, members, invites, orphans, stats, error, notice }) => {
   const base = `/admin/teams/${team.id}`;
   return (
     <Layout title={`${team.name} - Admin - Artifact Colab`} user={user} csrfToken={csrfToken} isInstanceAdmin>
@@ -335,6 +430,8 @@ export const AdminTeamPage: FC<{
       </p>
       <h1>{team.name}</h1>
       <Feedback error={error} notice={notice} />
+
+      <UsageSection stats={stats} />
 
       <RenameSection csrfToken={csrfToken} action={`${base}/rename`} team={team} />
 

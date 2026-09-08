@@ -27,6 +27,7 @@ import {
   type OrphanedDocRow,
 } from '../pages/teams.js';
 import { deleteDocumentCascade } from '../services/documents.js';
+import { instanceStats, teamStats } from '../services/teamStats.js';
 import {
   addTeamDomain,
   cancelInvite,
@@ -156,6 +157,7 @@ adminRoutes.get('/admin', (c) => {
       team,
       memberCount: db.select({ value: count() }).from(teamMembers).where(eq(teamMembers.teamId, team.id)).all()[0]!.value,
       domains: allDomains.filter((d) => d.teamId === team.id).map((d) => d.domain),
+      stats: teamStats(db, team.id),
     }));
 
   const uiAdmins = db.select().from(users).where(eq(users.isInstanceAdmin, true)).all();
@@ -173,6 +175,7 @@ adminRoutes.get('/admin', (c) => {
       user={admin}
       csrfToken={csrfTokenFor(c)}
       teams={teamRows}
+      instance={instanceStats(db)}
       admins={admins}
       pendingEnvAdmins={pendingEnvAdmins}
       teamlessUsers={listTeamlessUsers(db)}
@@ -209,6 +212,7 @@ adminRoutes.get('/admin/teams/:id', (c) => {
       members={memberRows(db, team.id)}
       invites={inviteRows(db, team.id)}
       orphans={orphanedPrivateDocRows(db, team.id)}
+      stats={teamStats(db, team.id)}
       error={c.req.query('error')}
       notice={c.req.query('notice')}
     />,
