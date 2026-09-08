@@ -13,12 +13,31 @@ import { LocalTime } from './localTime.js';
 export interface DocumentListRow {
   id: string;
   title: string;
+  /** The creator's display name, falling back to their email. */
+  ownerName: string;
+  ownerEmail: string | null;
+  /** Private documents are listed only for their creator. */
+  visibility: 'private' | 'team' | 'public';
   versionCount: number;
   openCommentCount: number;
   lastPublishedAt: Date | null;
-  /** Private documents are listed only for their creator, with a badge. */
-  isPrivate: boolean;
 }
+
+/** Column label per share level; `title` explains who the link opens for. */
+const shareLabels: Record<DocumentListRow['visibility'], { label: string; title: string }> = {
+  private: { label: 'Private', title: 'Only you can open this artifact' },
+  team: { label: 'Team', title: 'Only members of the team can open this artifact' },
+  public: { label: 'Public', title: 'Anyone signed in with the link can open this artifact' },
+};
+
+const ShareBadge: FC<{ visibility: DocumentListRow['visibility'] }> = ({ visibility }) => {
+  const share = shareLabels[visibility];
+  return (
+    <span class={`share-badge share-badge-${visibility}`} title={share.title}>
+      {share.label}
+    </span>
+  );
+};
 
 export interface TeamDocumentsGroup {
   teamId: string;
@@ -49,6 +68,8 @@ const DocumentsTable: FC<{ documents: DocumentListRow[] }> = ({ documents }) => 
     <thead>
       <tr>
         <th>Title</th>
+        <th>Owner</th>
+        <th>Sharing</th>
         <th>Versions</th>
         <th>Open comments</th>
         <th>Last published</th>
@@ -59,11 +80,12 @@ const DocumentsTable: FC<{ documents: DocumentListRow[] }> = ({ documents }) => 
         <tr>
           <td>
             <a href={`/d/${doc.id}`}>{doc.title}</a>
-            {doc.isPrivate && (
-              <span class="private-badge" title="Only you can open this artifact">
-                Private
-              </span>
-            )}
+          </td>
+          <td class="muted" title={doc.ownerEmail ?? undefined}>
+            {doc.ownerName}
+          </td>
+          <td>
+            <ShareBadge visibility={doc.visibility} />
           </td>
           <td>{doc.versionCount}</td>
           <td>{doc.openCommentCount}</td>

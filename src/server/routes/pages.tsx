@@ -51,13 +51,17 @@ function documentRow(db: DB, doc: Document): DocumentListRow {
     .limit(1)
     .all();
 
+  const [owner] = db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, doc.createdBy)).all();
+
   return {
     id: doc.id,
     title: doc.title,
+    ownerName: owner?.name ?? owner?.email ?? '—',
+    ownerEmail: owner?.email ?? null,
+    visibility: doc.visibility as DocumentListRow['visibility'],
     versionCount,
     openCommentCount,
     lastPublishedAt: latest?.publishedAt ?? null,
-    isPrivate: doc.visibility === 'private',
   };
 }
 

@@ -181,7 +181,7 @@ describe('private visibility', () => {
   test('the home listing hides the private document from the teammate, badges it for the creator', async () => {
     const creatorHome = await (await app.request('/', { headers: { cookie: creatorCookie } })).text();
     expect(creatorHome).toContain('Budget Draft');
-    expect(creatorHome).toContain('private-badge');
+    expect(creatorHome).toContain('share-badge-private');
 
     const teammateHome = await (await app.request('/', { headers: { cookie: teammateCookie } })).text();
     expect(teammateHome).not.toContain('Budget Draft');

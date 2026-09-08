@@ -256,9 +256,9 @@ p {
   color: var(--color-muted);
 }
 
-/* "Private" marker on the document list, next to the title. */
-.private-badge {
-  margin-left: 0.5rem;
+/* Share-level marker (Private / Team / Public) in the document list. */
+.share-badge {
+  display: inline-block;
   font-size: 0.72rem;
   font-weight: 500;
   letter-spacing: 0.04em;
@@ -268,7 +268,12 @@ p {
   border: 1px solid var(--color-rule);
   border-radius: var(--radius-pill);
   padding: 0.1rem 0.5rem;
-  vertical-align: 1px;
+  white-space: nowrap;
+}
+.share-badge-public {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: transparent;
 }
 
 .card {
