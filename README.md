@@ -72,8 +72,12 @@ production — the server refuses to start if `DEV_LOGIN_CODE` is set while `NOD
 
 ## Good to know
 
-- Connected agents get four MCP tools: `publish_artifact`, `get_artifact`, `get_comments`, and `resolve_comment` —
-  enough to publish a page, fetch it back, read the team's feedback, and close out addressed threads.
+- Connected agents get six MCP tools: `publish_artifact`, `get_artifact`, `get_comments`, `add_comment`,
+  `resolve_comment`, and `delete_artifact` — enough to publish a page, fetch it back, read the team's feedback, join
+  the discussion (open a thread on a quoted passage or reply to one), close out addressed threads, and clean up.
+- Comments an agent posts through MCP are attributed to the token's owner with an "agent" badge naming the access
+  token, so a review from Claude Code and one from a second reader model stay distinguishable in the sidebar and in
+  the digest emails.
 - You automatically watch every artifact you publish or comment on (the Watch button on the viewer opts any
   artifact in or out). Five minutes after a watched artifact's discussion goes quiet, everyone watching gets one
   email with all the comments they haven't seen — never their own.

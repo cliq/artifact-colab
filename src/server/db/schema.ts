@@ -258,6 +258,14 @@ export const comments = sqliteTable(
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     resolvedAt: integer('resolved_at', { mode: 'timestamp_ms' }),
     resolvedBy: text('resolved_by'),
+    /**
+     * Set when the comment was posted through the MCP endpoint: the access
+     * token that authenticated the call. The label is a snapshot (no FK) so
+     * the UI keeps attributing the comment to that agent after the token is
+     * revoked. Null for comments typed in the web UI.
+     */
+    viaTokenId: text('via_token_id'),
+    viaTokenLabel: text('via_token_label'),
   },
   (table) => [index('comments_document_id_idx').on(table.documentId)],
 );

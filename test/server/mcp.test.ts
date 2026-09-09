@@ -37,6 +37,7 @@ describe('mcp', () => {
   let db: DB;
   let app: Hono<AppEnv>;
   let pat: string;
+  let patId: string;
   let rpcId = 0;
 
   beforeAll(() => {
@@ -47,7 +48,9 @@ describe('mcp', () => {
     seedTeamWithDomain(db, 'team-evil', 'evil.com');
     app = createApp({ db, config });
     const user = getOrCreateUser(db, 'alice@example.com', new Date());
-    pat = createToken(db, user.id, 'team-example', 'test', new Date()).plaintext;
+    const created = createToken(db, user.id, 'team-example', 'Claude Code', new Date());
+    pat = created.plaintext;
+    patId = created.id;
   });
 
   async function rpc(method: string, params: unknown, token = pat): Promise<Response> {
@@ -93,10 +96,10 @@ describe('mcp', () => {
     expect(badAuth.headers.get('www-authenticate')).toBe('Bearer');
   });
 
-  test('lists the five tools', async () => {
+  test('lists the six tools', async () => {
     const result = await rpcResult(await rpc('tools/list', {}));
     const names = result.tools.map((t: any) => t.name).sort();
-    expect(names).toEqual(['delete_artifact', 'get_artifact', 'get_comments', 'publish_artifact', 'resolve_comment']);
+    expect(names).toEqual(['add_comment', 'delete_artifact', 'get_artifact', 'get_comments', 'publish_artifact', 'resolve_comment']);
   });
 
   let documentId: string;
@@ -176,6 +179,104 @@ describe('mcp', () => {
     expect(payload.comments).toHaveLength(1);
     expect(payload.comments[0].quotedText).toBe(quote);
     expect(payload.comments[0].author.email).toBe('bob@example.com');
+    // Typed in the UI (well, inserted directly): no token attribution.
+    expect(payload.comments[0].author.viaToken).toBeNull();
+  });
+
+  let agentCommentId: string;
+
+  test('add_comment opens a thread anchored on the quoted passage, attributed to the token', async () => {
+    // Sloppy whitespace and a curly apostrophe-free quote: normalization makes it match.
+    const result = await callTool('add_comment', {
+      document_id: documentId,
+      quoted_text: 'Revenue grew   steadily across\nall segments',
+      body: 'Which segments specifically? A breakdown would help.',
+    });
+    expect(result.isError, result.content[0].text).toBeFalsy();
+    const text = result.content[0].text as string;
+    expect(text).toContain('version 1');
+    expect(text).toContain('via token "Claude Code"');
+    agentCommentId = text.match(/Comment (\w+) added/)![1]!;
+
+    const payload = JSON.parse((await callTool('get_comments', { document_id: documentId })).content[0].text);
+    const thread = payload.comments.find((c: any) => c.id === agentCommentId);
+    expect(thread).toBeDefined();
+    expect(thread.quotedText).toBe('Revenue grew steadily across all segments');
+    expect(thread.anchorState.state).toBe('anchored');
+    expect(thread.author.email).toBe('alice@example.com');
+    expect(thread.author.viaToken).toEqual({ id: patId, label: 'Claude Code' });
+
+    const row = db.select().from(comments).where(eq(comments.id, agentCommentId)).get()!;
+    expect(row.viaTokenId).toBe(patId);
+    expect(row.viaTokenLabel).toBe('Claude Code');
+  });
+
+  test('add_comment rejects quotes that are missing, ambiguous, or mixed with a reply target', async () => {
+    const missing = await callTool('add_comment', { document_id: documentId, quoted_text: 'not in the document', body: 'x' });
+    expect(missing.isError).toBe(true);
+    expect(missing.content[0].text).toContain('was not found in version 1');
+
+    const ambiguous = await callTool('add_comment', { document_id: documentId, quoted_text: 'e', body: 'x' });
+    expect(ambiguous.isError).toBe(true);
+    expect(ambiguous.content[0].text).toContain('occurs');
+    expect(ambiguous.content[0].text).toContain('exactly once');
+
+    const empty = await callTool('add_comment', { document_id: documentId, quoted_text: '   ', body: 'x' });
+    expect(empty.isError).toBe(true);
+    expect(empty.content[0].text).toContain('empty');
+
+    const neither = await callTool('add_comment', { document_id: documentId, body: 'x' });
+    expect(neither.isError).toBe(true);
+    expect(neither.content[0].text).toContain('comment_id');
+
+    const both = await callTool('add_comment', { document_id: documentId, quoted_text: 'Revenue', comment_id: commentId, body: 'x' });
+    expect(both.isError).toBe(true);
+    expect(both.content[0].text).toContain('not both');
+
+    const unknownDoc = await callTool('add_comment', { document_id: 'nope123456', quoted_text: 'Revenue', body: 'x' });
+    expect(unknownDoc.isError).toBe(true);
+    expect(unknownDoc.content[0].text).toContain('unknown document_id');
+  });
+
+  test('add_comment with comment_id replies to the thread, even when given a reply id', async () => {
+    const first = await callTool('add_comment', { comment_id: commentId, body: 'Checked with finance: the number holds.' });
+    expect(first.isError, first.content[0].text).toBeFalsy();
+    const replyId = (first.content[0].text as string).match(/Reply (\w+) added to thread/)![1]!;
+    expect(first.content[0].text).toContain(`thread ${commentId}`);
+
+    const second = await callTool('add_comment', { comment_id: replyId, body: 'Adding the source link below.' });
+    expect(second.isError, second.content[0].text).toBeFalsy();
+    expect(second.content[0].text).toContain(`thread ${commentId}`);
+
+    const payload = JSON.parse((await callTool('get_comments', { document_id: documentId })).content[0].text);
+    const thread = payload.comments.find((c: any) => c.id === commentId);
+    expect(thread.replies.map((r: any) => r.body)).toEqual(['Checked with finance: the number holds.', 'Adding the source link below.']);
+    expect(thread.replies[0].author.email).toBe('alice@example.com');
+    expect(thread.replies[0].author.viaToken).toEqual({ id: patId, label: 'Claude Code' });
+
+    const unknown = await callTool('add_comment', { comment_id: 'doesnotexist', body: 'x' });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.content[0].text).toContain('unknown comment_id');
+
+    const mismatch = await callTool('add_comment', { comment_id: commentId, document_id: 'other12345', body: 'x' });
+    expect(mismatch.isError).toBe(true);
+    expect(mismatch.content[0].text).toContain('belongs to document');
+  });
+
+  test("add_comment can't reach another team's threads", async () => {
+    const mallory = getOrCreateUser(db, 'mallory@evil.com', new Date());
+    const malloryPat = createToken(db, mallory.id, 'team-evil', 'evil', new Date()).plaintext;
+    const reply = await rpcResult(
+      await rpc('tools/call', { name: 'add_comment', arguments: { comment_id: commentId, body: 'hi' } }, malloryPat),
+    );
+    expect(reply.isError).toBe(true);
+    expect(reply.content[0].text).toContain('unknown comment_id');
+
+    const thread = await rpcResult(
+      await rpc('tools/call', { name: 'add_comment', arguments: { document_id: documentId, quoted_text: 'Revenue', body: 'hi' } }, malloryPat),
+    );
+    expect(thread.isError).toBe(true);
+    expect(thread.content[0].text).toContain('unknown document_id');
   });
 
   test('republish reports the orphaned comment and updates anchor states', async () => {
@@ -191,7 +292,8 @@ describe('mcp', () => {
 
     const after = await callTool('get_comments', { document_id: documentId });
     const payload = JSON.parse(after.content[0].text);
-    expect(payload.comments[0].anchorState.state).toBe('orphaned');
+    expect(payload.comments.find((c: any) => c.id === commentId).anchorState.state).toBe('orphaned');
+    expect(payload.comments.find((c: any) => c.id === agentCommentId).anchorState.state).toBe('anchored');
   });
 
   test('get_artifact returns small artifacts inline, latest version by default', async () => {
@@ -237,9 +339,9 @@ describe('mcp', () => {
     expect(result.isError).toBeFalsy();
 
     const open = await callTool('get_comments', { document_id: documentId, status: 'open' });
-    expect(JSON.parse(open.content[0].text).comments).toHaveLength(0);
+    expect(JSON.parse(open.content[0].text).comments.map((c: any) => c.id)).toEqual([agentCommentId]);
     const resolved = await callTool('get_comments', { document_id: documentId, status: 'resolved' });
-    expect(JSON.parse(resolved.content[0].text).comments).toHaveLength(1);
+    expect(JSON.parse(resolved.content[0].text).comments.map((c: any) => c.id)).toEqual([commentId]);
   });
 
   test('resolve_comment on unknown/reply id errors', async () => {

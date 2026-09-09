@@ -6,7 +6,7 @@
 
 import type { Config } from './config.js';
 import type { DB } from './db/index.js';
-import type { User } from './db/schema.js';
+import type { Token, User } from './db/schema.js';
 
 export type AppEnv = {
   Variables: {
@@ -15,6 +15,8 @@ export type AppEnv = {
     config: Config;
     /** Set by bearerAuth: the authenticating token's team — bearer-authed lookups and publishes are scoped to it. */
     tokenTeamId: string;
+    /** Set by bearerAuth: the authenticating token row, so writes can be attributed to it (which agent commented). */
+    token: Token;
     /** Set by csrfProtect on GETs; valid even on the visit that mints the cookie. */
     csrfToken?: string;
   };

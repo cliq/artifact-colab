@@ -61,7 +61,8 @@ export type DigestSender = (email: DigestEmail) => Promise<void>;
 function digestText(baseUrl: string, docTitle: string, docId: string, items: Comment[], authorEmails: Map<string, string>): string {
   const lines: string[] = [`New comments on "${docTitle}":`, ''];
   for (const item of items) {
-    const author = authorEmails.get(item.authorId) ?? 'someone';
+    const person = authorEmails.get(item.authorId) ?? 'someone';
+    const author = item.viaTokenLabel ? `${person} (via ${item.viaTokenLabel})` : person;
     if (item.parentId === null) {
       lines.push(`${author} commented on "${item.quotedText}":`);
     } else {

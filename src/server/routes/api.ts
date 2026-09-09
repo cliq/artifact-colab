@@ -5,8 +5,6 @@
  * from a document that doesn't exist, so it 404s rather than 403s.
  */
 
-import { randomBytes } from 'node:crypto';
-
 import { and, asc, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
@@ -16,11 +14,10 @@ import type { AppEnv } from '../context.js';
 import type { DB } from '../db/index.js';
 import { comments, commentAnchorStates, commentReactions, documents, teamMembers, users, versions, type Comment, type Document, type Version } from '../db/schema.js';
 import { isReactionEmoji, REACTION_EMOJIS } from '../../shared/reactions.js';
-import { computeForComment, computeForCommentVersion } from '../services/anchorStates.js';
 import { assetsForDocument, relinkAssets, stripBaseHref } from '../services/assets.js';
+import { createReply, createThreadComment } from '../services/comments.js';
 import { gravatarUrl } from '../services/gravatar.js';
 import { buildZip, type ZipEntry } from '../services/zip.js';
-import { autoWatch } from '../services/watches.js';
 
 const anchorSchema = z.object({
   v: z.literal(1),
@@ -140,9 +137,22 @@ export interface AuthorDTO {
   avatarUrl: string;
   /** True when the author is not (or no longer) a member of the document's team — a public-doc guest. */
   isGuest: boolean;
+  /**
+   * Set when the comment was posted by an agent through the MCP endpoint: the
+   * access token it authenticated with (label as it read at posting time).
+   * Null for comments written in the web UI.
+   */
+  viaToken: { id: string; label: string } | null;
 }
 
-function authorFor(db: DB, userId: string, teamId: string): AuthorDTO {
+/** The token attribution stored on a comment row, as the DTO exposes it. */
+function viaTokenOf(comment: Pick<Comment, 'viaTokenId' | 'viaTokenLabel'>): AuthorDTO['viaToken'] {
+  if (comment.viaTokenId === null && comment.viaTokenLabel === null) return null;
+  return { id: comment.viaTokenId ?? '', label: comment.viaTokenLabel ?? '' };
+}
+
+function authorFor(db: DB, comment: Pick<Comment, 'authorId' | 'viaTokenId' | 'viaTokenLabel'>, teamId: string): AuthorDTO {
+  const userId = comment.authorId;
   const row = db.select().from(users).where(eq(users.id, userId)).get();
   const email = row?.email ?? '';
   const member = db
@@ -150,7 +160,7 @@ function authorFor(db: DB, userId: string, teamId: string): AuthorDTO {
     .from(teamMembers)
     .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, userId)))
     .get();
-  return { email, name: row?.name ?? null, avatarUrl: gravatarUrl(email), isGuest: member === undefined };
+  return { email, name: row?.name ?? null, avatarUrl: gravatarUrl(email), isGuest: member === undefined, viaToken: viaTokenOf(comment) };
 }
 
 function parseAnchorJson(raw: string): unknown {
@@ -260,7 +270,7 @@ export function buildThread(db: DB, comment: Comment, versionId: string | undefi
     quotedText: comment.quotedText,
     anchor: parseAnchorJson(comment.anchor),
     status: comment.status,
-    author: authorFor(db, comment.authorId, teamId),
+    author: authorFor(db, comment, teamId),
     createdAt: comment.createdAt,
     createdVersionId: comment.createdVersionId,
     resolvedAt: comment.resolvedAt,
@@ -272,7 +282,7 @@ export function buildThread(db: DB, comment: Comment, versionId: string | undefi
     replies: replyRows.map((reply) => ({
       id: reply.id,
       body: reply.body,
-      author: authorFor(db, reply.authorId, teamId),
+      author: authorFor(db, reply, teamId),
       createdAt: reply.createdAt,
       reactions: reactions.get(reply.id) ?? [],
     })),
@@ -370,33 +380,15 @@ apiRoutes.post('/api/docs/:slug/comments', async (c) => {
     return c.json({ error: 'quotedText is required' }, 400);
   }
 
-  const id = randomBytes(8).toString('hex');
-  const now = new Date();
-  db.insert(comments)
-    .values({
-      id,
-      documentId: doc.id,
-      parentId: null,
-      authorId: user.id,
-      body: parsed.data.body,
-      quotedText: parsed.data.quotedText,
-      anchor: JSON.stringify(parsed.data.anchor),
-      status: 'open',
-      createdVersionId: version.id,
-      createdAt: now,
-      resolvedAt: null,
-      resolvedBy: null,
-    })
-    .run();
-
-  // The state against the version it was created on, plus the state against
-  // the document's current version (the two may already be the same row).
-  computeForCommentVersion(db, id, version.id);
-  computeForComment(db, id);
-  autoWatch(db, doc.id, user.id, now);
-
-  const created = db.select().from(comments).where(eq(comments.id, id)).get();
-  if (!created) return c.json({ error: 'internal error' }, 500);
+  const created = createThreadComment(db, {
+    document: doc,
+    version,
+    authorId: user.id,
+    body: parsed.data.body,
+    quotedText: parsed.data.quotedText,
+    anchor: parsed.data.anchor,
+    via: null,
+  });
 
   return c.json(buildThread(db, created, version.id, doc.teamId, user.id), 201);
 });
@@ -417,29 +409,9 @@ apiRoutes.post('/api/comments/:id/replies', async (c) => {
 
   if (!parsed.success) return c.json({ error: 'invalid reply' }, 400);
 
-  const id = randomBytes(8).toString('hex');
-  const now = new Date();
-  db.insert(comments)
-    .values({
-      id,
-      documentId: parent.documentId,
-      parentId: parent.id,
-      authorId: user.id,
-      body: parsed.data.body,
-      // Replies don't carry their own anchor; the schema's columns are NOT NULL.
-      quotedText: '',
-      anchor: 'null',
-      status: 'open',
-      createdVersionId: parent.createdVersionId,
-      createdAt: now,
-      resolvedAt: null,
-      resolvedBy: null,
-    })
-    .run();
+  const reply = createReply(db, { parent, authorId: user.id, body: parsed.data.body, via: null });
 
-  autoWatch(db, parent.documentId, user.id, now);
-
-  return c.json({ id, body: parsed.data.body, author: authorFor(db, user.id, doc.teamId), createdAt: now }, 201);
+  return c.json({ id: reply.id, body: reply.body, author: authorFor(db, reply, doc.teamId), createdAt: reply.createdAt }, 201);
 });
 
 apiRoutes.post('/api/comments/:id/resolve', (c) => {
@@ -588,13 +560,14 @@ function commentsMarkdown(db: DB, baseUrl: string, doc: Document): string {
   ];
   const reactionNote = (reactions: ReactionDTO[]): string =>
     reactions.length === 0 ? '' : ` [${reactions.map((r) => `${r.emoji} ${r.count}`).join(' · ')}]`;
+  const authorName = (author: AuthorDTO): string => (author.viaToken ? `${author.email} (via ${author.viaToken.label})` : author.email);
   const renderSection = (title: string, items: ThreadDTO[]): void => {
     lines.push(`## ${title}`, '');
     for (const thread of items) {
       const state = thread.anchorState?.state ?? 'orphaned';
-      lines.push(`- **${thread.author.email}** on "${thread.quotedText}" (${state}): ${thread.body}${reactionNote(thread.reactions)}`);
+      lines.push(`- **${authorName(thread.author)}** on "${thread.quotedText}" (${state}): ${thread.body}${reactionNote(thread.reactions)}`);
       for (const reply of thread.replies) {
-        lines.push(`  - **${reply.author.email}**: ${reply.body}${reactionNote(reply.reactions)}`);
+        lines.push(`  - **${authorName(reply.author)}**: ${reply.body}${reactionNote(reply.reactions)}`);
       }
     }
     lines.push('');

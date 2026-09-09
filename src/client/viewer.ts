@@ -28,6 +28,8 @@ interface AuthorDTO {
   avatarUrl: string;
   /** Author is not a member of the document's team (public-doc guest). */
   isGuest: boolean;
+  /** Set when an agent posted the comment through MCP: the access token it used. */
+  viaToken: { id: string; label: string } | null;
 }
 
 interface ReactionDTO {
@@ -101,6 +103,8 @@ const SIDEBAR_CSS = `
 .badge-orphaned { background: #fee2e2; color: #b91c1c; }
 .badge-ambiguous { background: #fef3c7; color: #92400e; }
 .badge-guest { background: var(--color-paper-2); color: var(--color-muted); border: 1px solid var(--color-border); padding: 0 5px; }
+.badge-agent { background: color-mix(in srgb, var(--color-accent-bright) 12%, var(--color-surface)); color: var(--color-accent); border: 1px solid color-mix(in srgb, var(--color-accent-bright) 40%, var(--color-border)); padding: 0 5px; text-transform: none; letter-spacing: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.badge-agent .badge-agent-kind { text-transform: uppercase; letter-spacing: 0.02em; opacity: 0.75; margin-right: 4px; }
 .thread-meta { font-size: 11px; color: var(--color-muted); margin-bottom: 4px; display: flex; align-items: center; gap: 5px; }
 .thread-meta .author { font-weight: 600; color: var(--color-ink); }
 .thread-meta .avatar { width: 16px; height: 16px; border-radius: 50%; flex: none; }
@@ -182,6 +186,20 @@ function authorMeta(author: AuthorDTO, createdAt: string): HTMLElement {
   ];
   if (author.isGuest) {
     parts.push(el('span', { className: 'badge badge-guest', text: 'guest', attrs: { title: 'Not a member of this team' } }));
+  }
+  if (author.viaToken) {
+    // Agent-posted: the person is still the author, the badge says which of
+    // their access tokens (i.e. which agent/model) did the typing.
+    parts.push(
+      el(
+        'span',
+        {
+          className: 'badge badge-agent',
+          attrs: { title: `Posted by an agent through ${author.name ?? author.email}'s access token “${author.viaToken.label}”` },
+        },
+        [el('span', { className: 'badge-agent-kind', text: 'agent' }), document.createTextNode(author.viaToken.label)],
+      ),
+    );
   }
   parts.push(document.createTextNode(` · ${formatTime(createdAt)}`));
   return el('div', { className: 'thread-meta' }, parts);

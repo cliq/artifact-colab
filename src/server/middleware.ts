@@ -66,6 +66,7 @@ export function bearerAuth(): MiddlewareHandler<AppEnv> {
 
     c.set('user', auth.user);
     c.set('tokenTeamId', auth.token.teamId);
+    c.set('token', auth.token);
     await next();
   };
 }

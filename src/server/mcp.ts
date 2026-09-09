@@ -1,9 +1,11 @@
 /**
  * MCP endpoint (Streamable HTTP, stateless) exposing publish_artifact,
- * get_artifact, get_comments, resolve_comment, and delete_artifact. Auth is a personal access token via
- * `Authorization: Bearer` — the bearerAuth middleware resolves the user, and
- * the user rides into the per-request McpServer instance through
- * `authInfo.extra` (createMcpHandler calls the factory once per request).
+ * get_artifact, get_comments, add_comment, resolve_comment, and
+ * delete_artifact. Auth is a personal access token via `Authorization:
+ * Bearer` — the bearerAuth middleware resolves the user and token, and both
+ * ride into the per-request McpServer instance through `authInfo.extra`
+ * (createMcpHandler calls the factory once per request). Comments posted
+ * here are attributed to the token, so the UI can tell agents apart.
  */
 
 import { createMcpHandler, type AuthInfo, type CallToolResult, McpServer } from '@modelcontextprotocol/server';
@@ -13,7 +15,7 @@ import { z } from 'zod';
 import type { Config } from './config.js';
 import type { AppEnv } from './context.js';
 import type { DB } from './db/index.js';
-import type { User } from './db/schema.js';
+import type { Token, User } from './db/schema.js';
 import { comments } from './db/schema.js';
 import { bearerAuth } from './middleware.js';
 import {
@@ -27,6 +29,8 @@ import {
 } from './routes/api.js';
 import { assetsForDocument } from './services/assets.js';
 import type { IncomingAsset } from './services/assets.js';
+import { indexVersionHtml } from './services/anchorStates.js';
+import { createReply, createThreadComment, locateQuote, type CommentVia } from './services/comments.js';
 import { deleteDocumentCascade } from './services/documents.js';
 import { publishArtifact } from './services/publish.js';
 
@@ -36,8 +40,10 @@ function toolError(message: string): CallToolResult {
   return { content: [{ type: 'text', text: message }], isError: true };
 }
 
-function buildMcpServer(deps: { db: DB; config: Config }, user: User, teamId: string): McpServer {
+function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Token): McpServer {
   const { db, config } = deps;
+  const teamId = token.teamId;
+  const via: CommentVia = { tokenId: token.id, tokenLabel: token.label };
   const server = new McpServer({ name: 'artifact-colab', version: '1.0.0' });
 
   server.registerTool(
@@ -218,6 +224,99 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, teamId: st
   );
 
   server.registerTool(
+    'add_comment',
+    {
+      title: 'Add comment',
+      description:
+        "Post a comment on an artifact as the user this token belongs to. The web UI shows it under that user's name with an " +
+        `"agent" badge naming this token ("${token.label}"), so people can tell which agent wrote it. ` +
+        'Two modes. (1) New thread: pass document_id and quoted_text — the passage of the current version the comment is about, ' +
+        'quoted exactly as it reads in the rendered page (read it with get_artifact first). Markup is ignored and whitespace/curly quotes ' +
+        'are normalized, but the quote must occur exactly once; if it appears several times, extend it with surrounding words. ' +
+        '(2) Reply: pass comment_id of an existing thread (from get_comments); passing a reply id lands the reply on its thread.',
+      inputSchema: z.object({
+        body: z.string().min(1).max(10000).describe('The comment text (plain text; line breaks are preserved)'),
+        document_id: z.string().optional().describe('Document to open a new thread on; required together with quoted_text'),
+        quoted_text: z
+          .string()
+          .max(10000)
+          .optional()
+          .describe('Passage of the current version the new thread anchors to; must match the visible text exactly once'),
+        comment_id: z.string().optional().describe('Existing comment to reply to, instead of document_id + quoted_text'),
+      }),
+    },
+    async ({ body, document_id, quoted_text, comment_id }) => {
+      if (comment_id !== undefined) {
+        if (quoted_text !== undefined) {
+          return toolError('pass either comment_id (to reply) or document_id + quoted_text (to open a new thread), not both');
+        }
+        const target = db.select().from(comments).where(eq(comments.id, comment_id)).get();
+        const thread = target?.parentId ? db.select().from(comments).where(eq(comments.id, target.parentId)).get() : target;
+        const doc = thread ? findDocumentInTeam(db, thread.documentId, teamId, user.id) : undefined;
+        if (!thread || !doc) return toolError(`unknown comment_id: ${comment_id}`);
+        if (document_id !== undefined && document_id !== doc.id) {
+          return toolError(`comment ${comment_id} belongs to document ${doc.id}, not ${document_id}`);
+        }
+        const reply = createReply(db, { parent: thread, authorId: user.id, body, via });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Reply ${reply.id} added to thread ${thread.id} on "${doc.title}" (${config.baseUrl}/d/${doc.id}), attributed to ${user.email} via token "${token.label}".`,
+            },
+          ],
+        };
+      }
+
+      if (document_id === undefined || quoted_text === undefined) {
+        return toolError('pass document_id + quoted_text to open a new thread, or comment_id to reply to an existing one');
+      }
+      const doc = findDocumentInTeam(db, document_id, teamId, user.id);
+      if (!doc) return toolError(`unknown document_id: ${document_id}`);
+      const version = findVersion(db, doc);
+      if (!version) return toolError(`document ${document_id} has no published version to comment on`);
+
+      const located = locateQuote(indexVersionHtml(version.html), quoted_text);
+      if (!located.ok) {
+        switch (located.reason) {
+          case 'empty':
+            return toolError('quoted_text is empty; quote the passage the comment is about');
+          case 'not_found':
+            return toolError(
+              `quoted_text was not found in version ${version.number} of "${doc.title}". Quote the passage exactly as it reads in the rendered page ` +
+                '(fetch it with get_artifact); markup is ignored and whitespace is normalized, but the words must match.',
+            );
+          case 'ambiguous':
+            return toolError(
+              `quoted_text occurs ${located.count} times in version ${version.number} of "${doc.title}"; extend the quote with surrounding words so it matches exactly once.`,
+            );
+        }
+      }
+
+      const created = createThreadComment(db, {
+        document: doc,
+        version,
+        authorId: user.id,
+        body,
+        quotedText: located.quotedText,
+        anchor: located.anchor,
+        via,
+      });
+      return {
+        content: [
+          {
+            type: 'text',
+            text:
+              `Comment ${created.id} added on version ${version.number} of "${doc.title}" (${config.baseUrl}/d/${doc.id}), ` +
+              `anchored to "${located.quotedText}", attributed to ${user.email} via token "${token.label}". ` +
+              `Reply to it later with add_comment({ comment_id: "${created.id}" }).`,
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
     'resolve_comment',
     {
       title: 'Resolve comment',
@@ -261,9 +360,9 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, teamId: st
 export function mcpRoutes(deps: { db: DB; config: Config }): Hono<AppEnv> {
   const handler = createMcpHandler((ctx) => {
     const user = ctx.authInfo?.extra?.user as User | undefined;
-    const teamId = ctx.authInfo?.extra?.teamId as string | undefined;
-    if (!user || !teamId) throw new Error('mcp handler invoked without an authenticated user');
-    return buildMcpServer(deps, user, teamId);
+    const token = ctx.authInfo?.extra?.token as Token | undefined;
+    if (!user || !token) throw new Error('mcp handler invoked without an authenticated user');
+    return buildMcpServer(deps, user, token);
   });
 
   const routes = new Hono<AppEnv>();
@@ -271,7 +370,7 @@ export function mcpRoutes(deps: { db: DB; config: Config }): Hono<AppEnv> {
   routes.use('/mcp/*', bearerAuth());
   routes.all('/mcp', (c) => {
     const user = c.get('user');
-    const authInfo: AuthInfo = { token: '', clientId: user.id, scopes: [], extra: { user, teamId: c.get('tokenTeamId') } };
+    const authInfo: AuthInfo = { token: '', clientId: user.id, scopes: [], extra: { user, token: c.get('token') } };
     return handler.fetch(c.req.raw, { authInfo });
   });
   return routes;

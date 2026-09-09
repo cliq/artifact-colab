@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import Database from 'better-sqlite3';
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 
 import { getOrCreateUser } from '../../src/server/auth.js';
@@ -177,6 +178,19 @@ describe('watches', () => {
 
     // Cursors advanced: a later sweep sends nothing.
     expect(await sweep(quietAfter(at(3)))).toEqual([]);
+  });
+
+  test('digest names the access token when an agent posted the comment', async () => {
+    makeDoc('d-agent');
+    autoWatch(db, 'd-agent', alice.id, T0);
+    const threadId = addComment('d-agent', bob, at(1), 'Numbers look off in table 2.');
+    db.update(comments).set({ viaTokenId: 'tok1', viaTokenLabel: 'Codex' }).where(eq(comments.id, threadId)).run();
+    addComment('d-agent', carol, at(2), 'Agree, will fix.', threadId);
+
+    const sent = await sweep(quietAfter(at(2)));
+    const aliceEmail = sent.find((e) => e.to === 'alice@example.com')!;
+    expect(aliceEmail.text).toContain('bob@example.com (via Codex) commented on "quoted":');
+    expect(aliceEmail.text).toContain('carol@example.com replied:');
   });
 
   test('own-only activity advances the cursor without emailing the author', async () => {
