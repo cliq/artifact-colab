@@ -6,10 +6,20 @@
  */
 
 import type { TextAnchor } from '../anchoring/text.js';
-import type { AnchorPosition, AnchorState, AnnotatorAnchorInput, FrameMessage, ParentMessage } from '../annotator/protocol.js';
+import type {
+  AnchorPosition,
+  AnchorState,
+  AnnotatorAnchorInput,
+  DiffRangeInput,
+  FrameMessage,
+  ParentMessage,
+} from '../annotator/protocol.js';
 
 export interface BridgeCallbacks {
   onReady?: () => void;
+  /** The frame's normalized text (only when constructed with `reportText`); repeats whenever it changes. */
+  onText?: (text: string) => void;
+  onDiffClick?: (ids: string[]) => void;
   onCapabilities?: (highlights: boolean) => void;
   onSelection?: (
     anchor: TextAnchor | null,
@@ -28,14 +38,21 @@ function randomToken(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+export interface BridgeOptions {
+  /** Ask the annotator to report the frame's normalized text (compare mode). */
+  reportText?: boolean;
+}
+
 export class AnnotatorBridge {
   private readonly token = randomToken();
   private ready = false;
   private pendingAnchors: { anchors: AnnotatorAnchorInput[]; showResolved: boolean } | null = null;
+  private pendingDiff: { kind: 'added' | 'removed'; ranges: DiffRangeInput[] } | null = null;
 
   constructor(
     private readonly iframe: HTMLIFrameElement,
     private readonly callbacks: BridgeCallbacks,
+    private readonly options: BridgeOptions = {},
   ) {
     window.addEventListener('message', this.onMessage);
     this.iframe.addEventListener('load', () => this.init());
@@ -50,7 +67,7 @@ export class AnnotatorBridge {
 
   private init(): void {
     this.ready = false;
-    this.post({ token: this.token, type: 'annotator-init' });
+    this.post({ token: this.token, type: 'annotator-init', reportText: this.options.reportText === true });
   }
 
   private onMessage = (e: MessageEvent): void => {
@@ -64,7 +81,17 @@ export class AnnotatorBridge {
           this.post({ token: this.token, type: 'anchors', ...this.pendingAnchors });
           this.pendingAnchors = null;
         }
+        if (this.pendingDiff) {
+          this.post({ token: this.token, type: 'diff', ...this.pendingDiff });
+          this.pendingDiff = null;
+        }
         this.callbacks.onReady?.();
+        break;
+      case 'text':
+        this.callbacks.onText?.(msg.text);
+        break;
+      case 'diff:click':
+        this.callbacks.onDiffClick?.(msg.ids);
         break;
       case 'capabilities':
         this.callbacks.onCapabilities?.(msg.highlights);
@@ -96,11 +123,22 @@ export class AnnotatorBridge {
     this.post({ token: this.token, type: 'anchors', anchors, showResolved });
   }
 
-  focusComment(commentId: string | null): void {
-    this.post({ token: this.token, type: 'focus', commentId });
+  /** Paint one side of a version diff; queued until the frame is ready. */
+  sendDiff(kind: 'added' | 'removed', ranges: DiffRangeInput[]): void {
+    if (!this.ready) {
+      this.pendingDiff = { kind, ranges };
+      return;
+    }
+    this.post({ token: this.token, type: 'diff', kind, ranges });
   }
 
-  scrollToComment(commentId: string): void {
-    this.post({ token: this.token, type: 'scroll', commentId });
+  /** Highlight a comment or diff hunk as focused (null clears). */
+  focusAnchor(id: string | null): void {
+    this.post({ token: this.token, type: 'focus', commentId: id });
+  }
+
+  /** Scroll the frame so a comment's passage or a diff hunk is in view. */
+  scrollToAnchor(id: string): void {
+    this.post({ token: this.token, type: 'scroll', commentId: id });
   }
 }

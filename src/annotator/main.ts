@@ -12,7 +12,7 @@ import { installExternalLinks } from './links.js';
 import { describeAnchor } from '../anchoring/anchor.js';
 import { buildTextIndex, domToTextOffset, textRangeToDomRange, type TextIndex } from '../anchoring/index.js';
 import { locateTextAnchor } from '../anchoring/text.js';
-import type { AnchorPosition, AnnotatorAnchorInput, FrameMessage, ParentMessage } from './protocol.js';
+import type { AnchorPosition, AnnotatorAnchorInput, DiffRangeInput, FrameMessage, ParentMessage } from './protocol.js';
 
 installExternalLinks(document);
 
@@ -27,11 +27,24 @@ interface LocatedComment {
   range: Range;
 }
 
+/** A version-diff hunk mapped onto this frame's DOM. */
+interface LocatedDiff {
+  id: string;
+  start: number;
+  /** The range to paint (and scroll to); null for an empty hunk. */
+  range: Range | null;
+  /** Where an empty hunk sits: the neighbouring character, for positions and scrolling only. */
+  probe: Range;
+}
+
 const HIGHLIGHT_CSS = `
 ::highlight(ac-open) { background-color: rgba(255, 200, 40, 0.4); color: inherit; }
 ::highlight(ac-ambiguous) { background-color: rgba(255, 200, 40, 0.2); }
 ::highlight(ac-resolved) { background-color: rgba(120, 120, 120, 0.18); color: inherit; }
 ::highlight(ac-focused) { background-color: rgba(255, 145, 0, 0.6); }
+::highlight(ac-added) { background-color: rgba(34, 197, 94, 0.28); color: inherit; }
+::highlight(ac-removed) { background-color: rgba(239, 68, 68, 0.26); color: inherit; text-decoration: line-through; text-decoration-color: rgba(153, 27, 27, 0.6); }
+::highlight(ac-diff-focused) { background-color: rgba(255, 145, 0, 0.6); color: inherit; }
 `;
 
 function start(): void {
@@ -43,6 +56,12 @@ function start(): void {
   let showResolved = false;
   let relocateTimer: number | undefined;
   let observer: MutationObserver | null = null;
+  /** Compare mode: post the normalized text to the parent whenever it changes. */
+  let reportText = false;
+  let lastReportedText: string | null = null;
+  let diffKind: 'added' | 'removed' = 'added';
+  let diffRanges: DiffRangeInput[] = [];
+  let locatedDiff: LocatedDiff[] = [];
 
   const highlightsSupported = typeof CSS !== 'undefined' && 'highlights' in CSS;
 
@@ -59,6 +78,28 @@ function start(): void {
 
   function rebuildIndex(): void {
     ix = buildTextIndex(document);
+  }
+
+  function maybeReportText(): void {
+    if (!reportText || !token || !ix) return;
+    if (ix.text === lastReportedText) return;
+    lastReportedText = ix.text;
+    post({ token, type: 'text', text: ix.text });
+  }
+
+  /** Map the diff hunks onto DOM ranges of the current index. */
+  function locateDiff(currentIx: TextIndex): void {
+    locatedDiff = [];
+    if (diffRanges.length === 0 || currentIx.text.length === 0) return;
+    for (const input of diffRanges) {
+      const range = input.start < input.end ? textRangeToDomRange(currentIx, input.start, input.end) : null;
+      // An empty hunk (text only on the other side) still needs a spot to
+      // scroll to and report: the character right after it, or the last one.
+      const probeStart = Math.min(input.start, currentIx.text.length - 1);
+      const probe = range ?? textRangeToDomRange(currentIx, probeStart, probeStart + 1);
+      if (!probe) continue;
+      locatedDiff.push({ id: input.id, start: input.start, range, probe });
+    }
   }
 
   function paint(): void {
@@ -80,12 +121,21 @@ function start(): void {
         }
         (c.ambiguous ? ambiguous : open).push(c.range);
       }
+      const diffRangesToPaint: Range[] = [];
+      const diffFocused: Range[] = [];
+      for (const d of locatedDiff) {
+        if (!d.range) continue;
+        (d.id === focusedId ? diffFocused : diffRangesToPaint).push(d.range);
+      }
       const registry = CSS.highlights;
       const priorities: [string, Range[], number][] = [
         ['ac-resolved', resolved, 0],
         ['ac-open', open, 1],
         ['ac-ambiguous', ambiguous, 1],
         ['ac-focused', focused, 2],
+        ['ac-added', diffKind === 'added' ? diffRangesToPaint : [], 1],
+        ['ac-removed', diffKind === 'removed' ? diffRangesToPaint : [], 1],
+        ['ac-diff-focused', diffFocused, 2],
       ];
       for (const [name, ranges, priority] of priorities) {
         if (ranges.length === 0) {
@@ -123,6 +173,11 @@ function start(): void {
       if (rect.width === 0 && rect.height === 0) continue;
       positions.push({ id: c.input.id, top: rect.top, start: c.start });
     }
+    for (const d of locatedDiff) {
+      const rect = d.probe.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) continue;
+      positions.push({ id: d.id, top: rect.top, start: d.start });
+    }
     post({ token, type: 'positions', positions });
   }
 
@@ -141,6 +196,8 @@ function start(): void {
   function relocateAll(): void {
     rebuildIndex();
     const currentIx = ix!;
+    maybeReportText();
+    locateDiff(currentIx);
     located = [];
     const states: { id: string; state: 'anchored' | 'ambiguous' | 'orphaned' }[] = [];
     for (const input of anchors) {
@@ -247,12 +304,18 @@ function start(): void {
     // An empty hit list means "clicked outside any highlight" — the parent
     // uses it to clear the focused comment.
     post({ token, type: 'highlight:click', commentIds: hit });
+    if (diffRanges.length > 0) {
+      const ids =
+        at === null ? [] : diffRanges.filter((d) => d.start < d.end && d.start <= at && at < d.end).map((d) => d.id);
+      post({ token, type: 'diff:click', ids });
+    }
   }
 
-  function scrollToComment(commentId: string): void {
-    const c = located.find((l) => l.input.id === commentId);
-    if (!c) return;
-    const rect = c.range.getBoundingClientRect();
+  /** Bring a comment's highlight, or a diff hunk, into view. */
+  function scrollToAnchor(id: string): void {
+    const range = located.find((l) => l.input.id === id)?.range ?? locatedDiff.find((d) => d.id === id)?.probe;
+    if (!range) return;
+    const rect = range.getBoundingClientRect();
     window.scrollTo({ top: rect.top + window.scrollY - window.innerHeight / 3, behavior: 'smooth' });
   }
 
@@ -263,10 +326,12 @@ function start(): void {
     if (msg.type === 'annotator-init') {
       if (token !== null) return; // token is set once per load
       token = msg.token;
+      reportText = msg.reportText === true;
       post({ token, type: 'capabilities', highlights: highlightsSupported });
       rebuildIndex();
       startObserver();
       post({ token, type: 'ready' });
+      maybeReportText();
       reportLayout();
       window.addEventListener('resize', () => scheduleRelocate());
       // Capture phase reaches scroll events from nested scrollable elements too.
@@ -284,12 +349,21 @@ function start(): void {
           /* keep the artifact alive */
         }
         break;
+      case 'diff':
+        diffKind = msg.kind === 'removed' ? 'removed' : 'added';
+        diffRanges = Array.isArray(msg.ranges) ? msg.ranges : [];
+        try {
+          relocateAll();
+        } catch {
+          /* keep the artifact alive */
+        }
+        break;
       case 'focus':
         focusedId = msg.commentId;
         paint();
         break;
       case 'scroll':
-        scrollToComment(msg.commentId);
+        scrollToAnchor(msg.commentId);
         break;
     }
   }

@@ -9,6 +9,9 @@ import type { AnchorPosition, AnchorState, AnnotatorAnchorInput } from '../annot
 import { REACTION_EMOJIS } from '../shared/reactions.js';
 import type { TextAnchor } from '../anchoring/text.js';
 import { AnnotatorBridge } from './bridge.js';
+import { initCompare } from './compare.js';
+import { FrameScaler } from './frameScale.js';
+import { initSidebarCollapse } from './sidebarCollapse.js';
 
 const POLL_INTERVAL_MS = 30_000;
 const QUOTE_PREVIEW_MAX = 200;
@@ -20,6 +23,8 @@ interface ViewerData {
   versionNumber: number;
   isCurrentVersion: boolean;
   csrfToken: string;
+  /** Set when the page compares an older version against the shown one. */
+  compare: { versionNumber: number } | null;
 }
 
 interface AuthorDTO {
@@ -295,6 +300,14 @@ function init(): void {
     });
   });
 
+  // Compare mode replaces the comment sidebar with the list of changes
+  // between two versions and paints them inside two frames; nothing below
+  // (comments, composer, alignment) applies there.
+  if (data.compare) {
+    initCompare({ oldVersionNumber: data.compare.versionNumber, newVersionNumber: data.versionNumber });
+    return;
+  }
+
   let threads: ThreadDTO[] = [];
   let lastJson: string | null = null;
   const liveStates = new Map<string, AnchorState>();
@@ -532,7 +545,7 @@ function init(): void {
   function focusThread(id: string, opts?: { scroll?: boolean }): void {
     if (focusedCommentId !== id) {
       focusedCommentId = id;
-      bridge.focusComment(id);
+      bridge.focusAnchor(id);
       applyFocusClasses();
     }
     if (opts?.scroll) {
@@ -543,7 +556,7 @@ function init(): void {
   function clearFocus(): void {
     if (focusedCommentId === null) return;
     focusedCommentId = null;
-    bridge.focusComment(null);
+    bridge.focusAnchor(null);
     applyFocusClasses();
   }
 
@@ -573,7 +586,7 @@ function init(): void {
       text: truncate(thread.quotedText, QUOTE_PREVIEW_MAX),
       onClick: (e) => {
         e.stopPropagation();
-        bridge.scrollToComment(thread.id);
+        bridge.scrollToAnchor(thread.id);
         focusThread(thread.id);
       },
     });
@@ -614,7 +627,7 @@ function init(): void {
     // listener (not focus) so the focus restore after a sidebar rebuild can't
     // scroll the artifact mid-typing.
     replyTextarea.addEventListener('click', () => {
-      bridge.scrollToComment(thread.id);
+      bridge.scrollToAnchor(thread.id);
     });
     async function submitReply(): Promise<void> {
       const value = replyTextarea.value.trim();
@@ -685,7 +698,7 @@ function init(): void {
           // An off-screen anchor (edge stub, or the focused card clamped at an
           // edge): expanding in place would leave the card pinned there, so
           // bring the passage into view as well.
-          if (card.dataset['offscreen'] === 'true') bridge.scrollToComment(thread.id);
+          if (card.dataset['offscreen'] === 'true') bridge.scrollToAnchor(thread.id);
           focusThread(thread.id);
         },
       },
@@ -708,7 +721,7 @@ function init(): void {
       e.stopPropagation();
       const id = button.dataset['targetId'];
       if (!id) return;
-      bridge.scrollToComment(id);
+      bridge.scrollToAnchor(id);
       focusThread(id);
     });
     return button;
@@ -807,7 +820,7 @@ function init(): void {
     const next = at === -1 ? (dir === 1 ? 0 : ids.length - 1) : (at + dir + ids.length) % ids.length;
     const id = ids[next]!;
     focusThread(id, { scroll: true });
-    bridge.scrollToComment(id);
+    bridge.scrollToAnchor(id);
   }
 
   prevButton?.addEventListener('click', () => navigateComments(-1));
@@ -911,10 +924,10 @@ function init(): void {
     const below: AlignEntry[] = [];
     let pivot: AlignEntry | null = null;
     const focusedPos = focusedCommentId ? framePositions.get(focusedCommentId) : undefined;
-    const pivotTarget = focusedPos ? frameOffset + focusedPos.top * currentScale : null;
+    const pivotTarget = focusedPos ? frameOffset + focusedPos.top * currentScale() : null;
     for (const { id, card, pos } of positioned) {
       const focused = id === focusedCommentId;
-      const target = frameOffset + pos.top * currentScale;
+      const target = frameOffset + pos.top * currentScale();
       const entry: AlignEntry = { id, card, target, start: pos.start, height: 0, weight: focused ? FOCUS_WEIGHT : 1 };
       let offscreen = target < aboveLimit ? above : target > belowLimit ? below : null;
       if (offscreen === null && demoted.has(id) && pivotTarget !== null) {
@@ -1055,80 +1068,23 @@ function init(): void {
   }
 
   // --- fit-to-width scaling ---------------------------------------------
-  // Claude artifacts are often laid out for a full browser window. The
-  // annotator reports the frame's natural content width; when it exceeds the
-  // space next to the sidebar, the whole frame is scaled down to fit (the
-  // browser maps pointer coordinates through the transform, so selection and
-  // click hit-testing inside the frame keep working).
   const frameWrap = document.getElementById('frame-wrap');
-  let naturalWidth = 0;
-  let currentScale = 1;
-
-  function applyFrameScale(): void {
-    if (!frameWrap || !iframe) return;
-    const available = frameWrap.clientWidth;
-    const availableHeight = frameWrap.clientHeight;
-    if (naturalWidth <= available + 4) {
-      currentScale = 1;
-      iframe.style.width = '100%';
-      iframe.style.height = '100%';
-      iframe.style.transform = '';
-      return;
-    }
-    currentScale = available / naturalWidth;
-    iframe.style.width = `${naturalWidth}px`;
-    iframe.style.height = `${availableHeight / currentScale}px`;
-    iframe.style.transform = `scale(${currentScale})`;
-    iframe.style.transformOrigin = '0 0';
-  }
+  const scaler = new FrameScaler(frameWrap, iframe);
+  const currentScale = (): number => scaler.scale;
 
   window.addEventListener('resize', () => {
-    applyFrameScale();
+    scaler.apply();
     alignCards();
   });
 
-  // --- collapsible sidebar ------------------------------------------------
-  // The collapsed choice is a device preference (like the agent picker on the
-  // settings page), so it lives in localStorage, not per document.
-  const sidebarAside = document.getElementById('comments-sidebar');
-  const collapseButton = document.getElementById('collapse-sidebar');
-  const expandButton = document.getElementById('expand-sidebar');
-  const SIDEBAR_COLLAPSED_KEY = 'artifact-colab:comments-collapsed';
-
-  function setSidebarCollapsed(collapsed: boolean, persist: boolean): void {
-    if (!sidebarAside || !expandButton) return;
-    sidebarAside.classList.toggle('collapsed', collapsed);
-    expandButton.hidden = !collapsed;
-    if (persist) {
-      try {
-        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0');
-      } catch {
-        // Private browsing: the toggle still works, it just isn't remembered.
-      }
-    }
-    // The frame just gained or lost the sidebar's width.
-    applyFrameScale();
+  initSidebarCollapse(() => {
+    scaler.apply();
     alignCards();
-  }
-
-  collapseButton?.addEventListener('click', () => setSidebarCollapsed(true, true));
-  expandButton?.addEventListener('click', () => setSidebarCollapsed(false, true));
-  try {
-    if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1') setSidebarCollapsed(true, false);
-  } catch {
-    // Ignore: default to expanded.
-  }
+  });
 
   // --- bridge -----------------------------------------------------------
   const bridge = new AnnotatorBridge(iframe, {
-    onLayout: (contentWidth) => {
-      // Only ever grow within one document load: once scaled, the frame's
-      // inner viewport equals the content width, so later reports shrink.
-      if (contentWidth > naturalWidth) {
-        naturalWidth = contentWidth;
-        applyFrameScale();
-      }
-    },
+    onLayout: (contentWidth) => scaler.report(contentWidth),
     onPositions: (positions) => {
       framePositions.clear();
       for (const p of positions) framePositions.set(p.id, p);

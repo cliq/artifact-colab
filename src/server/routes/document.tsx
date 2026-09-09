@@ -99,6 +99,24 @@ documentRoutes.get('/d/:slug', (c) => {
     shown = requested;
   }
 
+  // ?compare=N shows version N beside the shown one with their text
+  // differences painted. The older of the two is always the base ("before"),
+  // whichever parameter it arrived in; comparing a version with itself is
+  // just the plain view.
+  const compareParam = c.req.query('compare');
+  let compareVersion = null;
+  if (compareParam !== undefined) {
+    const number = Number.parseInt(compareParam, 10);
+    const requested = versionRows.find((v) => v.number === number);
+    if (!requested) return c.notFound();
+    if (requested.number > shown.number) {
+      compareVersion = shown;
+      shown = requested;
+    } else if (requested.id !== shown.id) {
+      compareVersion = requested;
+    }
+  }
+
   const csrfToken = csrfTokenFor(c);
   return c.html(
     <DocumentPage
@@ -107,6 +125,7 @@ documentRoutes.get('/d/:slug', (c) => {
       document={doc}
       versions={versionRows}
       shownVersion={shown}
+      compareVersion={compareVersion}
       watching={isWatching(db, doc.id, user.id)}
       canDelete={access.isMember && canDeleteDocument(c, doc)}
       isMember={access.isMember}

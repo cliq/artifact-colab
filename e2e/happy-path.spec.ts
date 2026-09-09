@@ -368,6 +368,59 @@ test.describe('happy path', () => {
     await expect(composer).toBeHidden();
   });
 
+  test('compare mode paints removals and additions in two frames and lists the changes', async () => {
+    // Republish with one sentence rewritten and a paragraph appended; the
+    // client-side rewrite of #live is identical in both, so it must not show up.
+    const v2Html = FIXTURE_HTML.replace(
+      'something stable to index before anything moves.',
+      'something stable to index before anything shifts.',
+    ).replace('</body>', '<p>A brand new closing thought for version two.</p></body>');
+    const result = await callTool(page.request, pat, 'publish_artifact', { title: 'E2E Fixture', html: v2Html, document_id: slug });
+    expect(result.isError).toBeFalsy();
+
+    await page.goto(`/d/${slug}`);
+    // No Compare menu in the plain view; the versions menu's v1 row has a Compare button.
+    await expect(page.locator('#compare-picker')).toHaveCount(0);
+    await page.locator('#version-picker').click();
+    await page.locator('.version-option[data-version="1"] .version-compare').click();
+    await page.waitForURL((url) => url.searchParams.get('compare') === '1');
+    await expect(page.locator('#compare-picker')).toHaveText('Comparing with v1');
+    await expect(page.locator('.viewer-toolbar .stale-note')).toHaveText('comparing v1 → v2 — commenting disabled');
+    await expect(page.locator('#compare-frame')).toHaveAttribute('src', `/d/${slug}/frame?version=1`);
+    await expect(page.locator('#artifact-frame')).toHaveAttribute('src', `/d/${slug}/frame?version=2`);
+
+    const cards = page.locator('.change-card');
+    await expect(cards).toHaveCount(2);
+    await expect(page.locator('#comments-title')).toHaveText('Changes (2)');
+    await expect(cards.nth(0)).toContainText('moves.');
+    await expect(cards.nth(0)).toContainText('shifts.');
+    await expect(cards.nth(0).locator('.change-kind')).toHaveText('Changed');
+    await expect(cards.nth(1)).toContainText('A brand new closing thought for version two.');
+    await expect(cards.nth(1).locator('.change-kind')).toHaveText('Added');
+
+    const oldFrame = await (await page.locator('#compare-frame').elementHandle())!.contentFrame();
+    const newFrame = await getArtifactFrame(page);
+    await expect.poll(() => oldFrame!.evaluate(() => CSS.highlights.get('ac-removed')?.size ?? 0)).toBe(1);
+    await expect.poll(() => newFrame.evaluate(() => CSS.highlights.get('ac-added')?.size ?? 0)).toBe(2);
+    // Wait past the fixture's 1.5s in-place rewrite: the diff must stay the same.
+    await page.waitForTimeout(2000);
+    await expect(cards).toHaveCount(2);
+
+    // Clicking a change focuses it in both frames; the arrows walk the list.
+    await cards.nth(1).click();
+    await expect(cards.nth(1)).toHaveClass(/focused/);
+    await expect.poll(() => newFrame.evaluate(() => CSS.highlights.get('ac-diff-focused')?.size ?? 0)).toBe(1);
+    await page.locator('#prev-comment').click();
+    await expect(cards.nth(0)).toHaveClass(/focused/);
+
+    // Leaving compare mode restores the comment sidebar.
+    await page.locator('#compare-picker').click();
+    await page.locator('.compare-panel a', { hasText: 'Stop comparing' }).click();
+    await page.waitForURL((url) => url.pathname === `/d/${slug}` && !url.searchParams.has('compare'));
+    await expect(page.locator('#compare-frame')).toHaveCount(0);
+    await expect(page.locator('.thread-card', { hasText: commentBody })).toBeVisible();
+  });
+
   test('a gmail contractor is invited, signs in with the emailed code, sees the document, and comments', async ({
     browser,
   }) => {

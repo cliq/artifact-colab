@@ -28,6 +28,8 @@ export interface DocumentPageProps {
   versions: VersionSummary[];
   /** The version being displayed (defaults to the document's current one). */
   shownVersion: VersionSummary;
+  /** Compare mode: the older version shown beside `shownVersion`, with the text changes between them painted. */
+  compareVersion: VersionSummary | null;
   /** Whether the signed-in user watches this document (comment digest emails). */
   watching: boolean;
   /** Whether the signed-in user may delete this document (member and author-or-team-admin). */
@@ -63,9 +65,14 @@ main { flex: 1 1 auto; min-height: 0; max-width: none; width: 100%; margin: 0; p
 .viewer-toolbar .shared-note { font-size: 12px; color: var(--color-muted); background: var(--color-bg); border-radius: 4px; padding: 2px 8px; }
 .version-menu summary { font-family: var(--font-mono); font-weight: 600; }
 .version-panel { min-width: 260px; padding: 6px; }
-.version-option { display: block; padding: 7px 10px; border-radius: 8px; text-decoration: none; color: var(--color-text); }
-.version-option:hover { background: var(--color-paper-2); text-decoration: none; }
+.version-option { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 8px; color: var(--color-text); }
+.version-option:hover { background: var(--color-paper-2); }
 .version-option[aria-selected='true'] { background: var(--color-accent-wash); }
+/* Both anchors override the generic full-width menu-link rule: the row itself is the hover surface. */
+.version-panel .version-option .version-link { flex: 1; min-width: 0; padding: 0; text-decoration: none; color: inherit; background: transparent; }
+/* Icon button entering compare mode against the shown version; the shown row itself has nothing to compare with. */
+.version-panel .version-option .version-compare { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 1px solid transparent; border-radius: 6px; color: var(--color-muted); background: transparent; transition: color 150ms ease-out, background 150ms ease-out, border-color 150ms ease-out; }
+.version-panel .version-option .version-compare:hover { color: var(--color-accent); background: var(--color-surface); border-color: var(--color-border); }
 .version-option .version-number { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
 .version-option .version-current { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-accent); }
 .version-option .version-details { display: block; font-size: 12px; color: var(--color-muted); margin-top: 2px; white-space: nowrap; }
@@ -85,6 +92,21 @@ main { flex: 1 1 auto; min-height: 0; max-width: none; width: 100%; margin: 0; p
 .share-link-note { font-size: 11.5px; color: var(--color-muted); margin: 8px 2px 0; }
 .frame-wrap { flex: 1; min-height: 0; overflow: hidden; background: #fff; }
 #artifact-frame { width: 100%; height: 100%; border: 0; background: #fff; display: block; }
+/* Compare mode: the older version on the left, the shown one on the right. */
+.frame-wrap.comparing { display: grid; grid-template-columns: 1fr 1fr; }
+.compare-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.compare-pane + .compare-pane { border-left: 1px solid var(--color-border); }
+.compare-pane-label { flex: none; display: flex; align-items: center; gap: 8px; padding: 5px 12px; font-size: 12px; color: var(--color-muted); background: var(--color-bg); border-bottom: 1px solid var(--color-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.compare-pane-label .pane-version { font-family: var(--font-mono); font-weight: 600; color: var(--color-ink); }
+.compare-pane-label .pane-kind { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 3px; }
+.compare-pane-label .pane-kind.old { background: #fee2e2; color: #b91c1c; }
+.compare-pane-label .pane-kind.new { background: #dcfce7; color: #15803d; }
+.compare-pane-frame { flex: 1; min-height: 0; overflow: hidden; background: #fff; }
+.compare-pane-frame iframe { width: 100%; height: 100%; border: 0; background: #fff; display: block; }
+.compare-menu summary.comparing { color: var(--color-accent); }
+.compare-panel { min-width: 220px; }
+.compare-panel .compare-hint { font-size: 11.5px; color: var(--color-muted); padding: 6px 10px 4px; }
+@media (max-width: 900px) { .frame-wrap.comparing { grid-template-columns: 1fr; } .compare-pane.old { display: none; } }
 .sidebar { width: 360px; flex: none; border-left: 1px solid var(--color-border); background: var(--color-surface); display: flex; flex-direction: column; }
 .sidebar-header { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 8px 16px; font-size: 12px; font-weight: 650; letter-spacing: 0.05em; text-transform: uppercase; color: var(--color-muted); border-bottom: 1px solid var(--color-border); }
 .comment-nav { display: flex; gap: 4px; }
@@ -137,9 +159,35 @@ const shareOptions = [
   },
 ] as const;
 
-export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document, versions, shownVersion, watching, canDelete, isMember, shareUrl }) => {
-  const backToUrl =
-    shownVersion.id === document.currentVersionId ? `/d/${document.id}` : `/d/${document.id}?version=${shownVersion.number}`;
+/**
+ * URL of the viewer for `shown` (the current version needs no query), optionally
+ * comparing it with `compare`. The older of the two is always the base, so the
+ * "before" pane never shows the newer version.
+ */
+export function viewerUrl(document: Document, shown: VersionSummary, compare?: VersionSummary | null): string {
+  const params = new URLSearchParams();
+  const [before, after] = compare && compare.number > shown.number ? [shown, compare] : [compare, shown];
+  if (after.id !== document.currentVersionId || before) params.set('version', String(after.number));
+  if (before) params.set('compare', String(before.number));
+  const query = params.toString();
+  return `/d/${document.id}${query ? `?${query}` : ''}`;
+}
+
+export const DocumentPage: FC<DocumentPageProps> = ({
+  user,
+  csrfToken,
+  document,
+  versions,
+  shownVersion,
+  compareVersion,
+  watching,
+  canDelete,
+  isMember,
+  shareUrl,
+}) => {
+  const backToUrl = viewerUrl(document, shownVersion, compareVersion);
+  const isCurrent = shownVersion.id === document.currentVersionId;
+  const previousVersion = [...versions].reverse().find((v) => v.number < shownVersion.number) ?? null;
   // Only the creator can make a document private (the server enforces it too).
   const visibleShareOptions = shareOptions.filter((o) => o.value !== 'private' || document.createdBy === user.id);
   const currentShare = shareOptions.find((o) => o.value === document.visibility) ?? shareOptions[1];
@@ -151,8 +199,9 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
     title: document.title,
     versionId: shownVersion.id,
     versionNumber: shownVersion.number,
-    isCurrentVersion: shownVersion.id === document.currentVersionId,
+    isCurrentVersion: isCurrent,
     csrfToken,
+    compare: compareVersion ? { versionNumber: compareVersion.number } : null,
   }).replaceAll('<', '\\u003c');
   return (
     <Layout title={document.title} user={user} csrfToken={csrfToken}>
@@ -165,8 +214,12 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
         <div class="viewer-main">
           <div class="viewer-toolbar">
             <h1>{document.title}</h1>
-            {shownVersion.id !== document.currentVersionId && (
-              <span class="stale-note">viewing an old version — commenting disabled</span>
+            {compareVersion ? (
+              <span class="stale-note">
+                comparing v{compareVersion.number} → v{shownVersion.number} — commenting disabled
+              </span>
+            ) : (
+              !isCurrent && <span class="stale-note">viewing an old version — commenting disabled</span>
             )}
             <div class="toolbar-spacer"></div>
             {/* A menu rather than a <select>: the closed state shows only the
@@ -178,26 +231,57 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
               </summary>
               <div class="settings-menu-items version-panel" role="listbox" aria-label="Versions">
                 {[...versions].reverse().map((v) => (
-                  <a
-                    class="version-option"
-                    role="option"
-                    aria-selected={v.id === shownVersion.id ? 'true' : 'false'}
-                    href={v.id === document.currentVersionId ? `/d/${document.id}` : `/d/${document.id}?version=${v.number}`}
-                    data-version={String(v.number)}
-                  >
-                    <span class="version-number">
-                      v{v.number}
-                      {v.id === document.currentVersionId && <span class="version-current">current</span>}
-                    </span>
-                    <span class="version-details">
-                      <time datetime={v.publishedAt.toISOString()}>{v.publishedAt.toISOString().slice(0, 16).replace('T', ' ')} UTC</time>
-                      {' · '}
-                      {publisherLabel(v)}
-                    </span>
-                  </a>
+                  <div class="version-option" role="option" aria-selected={v.id === shownVersion.id ? 'true' : 'false'} data-version={String(v.number)}>
+                    <a class="version-link" href={viewerUrl(document, v)}>
+                      <span class="version-number">
+                        v{v.number}
+                        {v.id === document.currentVersionId && <span class="version-current">current</span>}
+                      </span>
+                      <span class="version-details">
+                        <time datetime={v.publishedAt.toISOString()}>{v.publishedAt.toISOString().slice(0, 16).replace('T', ' ')} UTC</time>
+                        {' · '}
+                        {publisherLabel(v)}
+                      </span>
+                    </a>
+                    {v.id !== shownVersion.id && (
+                      <a
+                        class="version-compare"
+                        href={viewerUrl(document, shownVersion, v)}
+                        title={`Show what changed between v${Math.min(v.number, shownVersion.number)} and v${Math.max(v.number, shownVersion.number)}`}
+                        aria-label={`Compare v${shownVersion.number} with v${v.number}`}
+                      >
+                        {/* A split view: the two panes the comparison opens. */}
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" stroke="currentColor" stroke-width="1.6" />
+                          <path d="M8 2.75v10.5" stroke="currentColor" stroke-width="1.6" />
+                        </svg>
+                      </a>
+                    )}
+                  </div>
                 ))}
               </div>
             </details>
+            {/* Only while comparing (entered from a row's Compare button in the versions menu): switch the base or leave. */}
+            {compareVersion && (
+              <details class="settings-menu compare-menu">
+                <summary id="compare-picker" class="comparing">
+                  Comparing with v{compareVersion.number}
+                </summary>
+                <div class="settings-menu-items compare-panel">
+                  <div class="compare-hint">Show what changed in v{shownVersion.number} since…</div>
+                  {[...versions]
+                    .reverse()
+                    .filter((v) => v.id !== shownVersion.id)
+                    .map((v) => (
+                      <a href={viewerUrl(document, shownVersion, v)} data-compare={String(v.number)} aria-current={compareVersion.id === v.id ? 'true' : undefined}>
+                        v{v.number}
+                        {previousVersion?.id === v.id ? ' (previous)' : ''} · {publisherLabel(v)}
+                      </a>
+                    ))}
+                  <a href={viewerUrl(document, shownVersion)}>Stop comparing</a>
+                </div>
+              </details>
+            )}
             {isMember ? (
               <details class="settings-menu share-menu">
                 <summary>{currentShare.summary}</summary>
@@ -270,36 +354,84 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
               </div>
             </details>
           </div>
-          <div class="frame-wrap" id="frame-wrap">
-            <iframe
-              id="artifact-frame"
-              sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-              src={`/d/${document.id}/frame?version=${shownVersion.number}`}
-              title={document.title}
-            ></iframe>
-          </div>
+          {compareVersion ? (
+            <div class="frame-wrap comparing" id="frame-wrap">
+              <div class="compare-pane old" id="compare-pane-old">
+                <div class="compare-pane-label">
+                  <span class="pane-kind old">Before</span>
+                  <span class="pane-version">v{compareVersion.number}</span>
+                  <span>{publisherLabel(compareVersion)}</span>
+                </div>
+                <div class="compare-pane-frame" id="compare-pane-old-frame">
+                  <iframe
+                    id="compare-frame"
+                    sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+                    src={`/d/${document.id}/frame?version=${compareVersion.number}`}
+                    title={`${document.title} — v${compareVersion.number}`}
+                  ></iframe>
+                </div>
+              </div>
+              <div class="compare-pane new" id="compare-pane-new">
+                <div class="compare-pane-label">
+                  <span class="pane-kind new">After</span>
+                  <span class="pane-version">v{shownVersion.number}</span>
+                  <span>{publisherLabel(shownVersion)}</span>
+                  {isCurrent && <span class="version-current">current</span>}
+                </div>
+                <div class="compare-pane-frame" id="compare-pane-new-frame">
+                  <iframe
+                    id="artifact-frame"
+                    sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+                    src={`/d/${document.id}/frame?version=${shownVersion.number}`}
+                    title={`${document.title} — v${shownVersion.number}`}
+                  ></iframe>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div class="frame-wrap" id="frame-wrap">
+              <iframe
+                id="artifact-frame"
+                sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+                src={`/d/${document.id}/frame?version=${shownVersion.number}`}
+                title={document.title}
+              ></iframe>
+            </div>
+          )}
         </div>
         <aside class="sidebar" id="comments-sidebar">
-          <button type="button" id="expand-sidebar" class="sidebar-expand" title="Show comments" aria-label="Show comments" hidden>
+          <button
+            type="button"
+            id="expand-sidebar"
+            class="sidebar-expand"
+            title={compareVersion ? 'Show changes' : 'Show comments'}
+            aria-label={compareVersion ? 'Show changes' : 'Show comments'}
+            hidden
+          >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <path d="M10 3L5.5 8L10 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
-            <span class="rail-label" id="comments-rail-label">Comments</span>
+            <span class="rail-label" id="comments-rail-label">{compareVersion ? 'Changes' : 'Comments'}</span>
           </button>
           <div class="sidebar-header">
-            <span id="comments-title">Comments</span>
+            <span id="comments-title">{compareVersion ? 'Changes' : 'Comments'}</span>
             <div class="comment-nav">
-              <button type="button" id="prev-comment" aria-label="Previous comment" disabled>
+              <button type="button" id="prev-comment" aria-label={compareVersion ? 'Previous change' : 'Previous comment'} disabled>
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                   <path d="M10 3L5.5 8L10 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
               </button>
-              <button type="button" id="next-comment" aria-label="Next comment" disabled>
+              <button type="button" id="next-comment" aria-label={compareVersion ? 'Next change' : 'Next comment'} disabled>
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                   <path d="M6 3L10.5 8L6 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
               </button>
-              <button type="button" id="collapse-sidebar" title="Hide comments" aria-label="Hide comments">
+              <button
+                type="button"
+                id="collapse-sidebar"
+                title={compareVersion ? 'Hide changes' : 'Hide comments'}
+                aria-label={compareVersion ? 'Hide changes' : 'Hide comments'}
+              >
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                   <path d="M6 3L10.5 8L6 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
                   <path d="M11 3v10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
@@ -307,7 +439,7 @@ export const DocumentPage: FC<DocumentPageProps> = ({ user, csrfToken, document,
               </button>
             </div>
           </div>
-          <div class="comment-filter" role="tablist" aria-label="Which comments to show">
+          <div class="comment-filter" role="tablist" aria-label="Which comments to show" hidden={compareVersion !== null}>
             <button type="button" role="tab" data-filter="open" aria-selected="true">
               Open
             </button>

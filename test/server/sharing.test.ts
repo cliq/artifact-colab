@@ -255,6 +255,57 @@ describe('public sharing', () => {
     expect(html).toContain(' · unknown user');
   });
 
+  test('?compare= renders both versions side by side with the changes sidebar', async () => {
+    const html = await (await app.request(`/d/${slug}?version=2&compare=1`, { headers: { cookie: ownerCookie } })).text();
+    // Two sandboxed frames: the older version on the left, the shown one on the right.
+    expect(html).toContain(`id="compare-frame"`);
+    expect(html).toContain(`src="/d/${slug}/frame?version=1"`);
+    expect(html).toContain(`id="artifact-frame"`);
+    expect(html).toContain(`src="/d/${slug}/frame?version=2"`);
+    expect(html).toContain('comparing v1 → v2 — commenting disabled');
+    // The sidebar becomes the change list and the client learns which version is the base.
+    expect(html).toContain('<span id="comments-title">Changes</span>');
+    expect(html).toMatch(/<div class="comment-filter"[^>]*hidden/);
+    expect(html).toContain('"compare":{"versionNumber":1}');
+    // The Compare menu marks the active base and offers a way out.
+    // The shown version is current, so leaving compare mode goes back to the canonical URL.
+    expect(html).toContain(`<a href="/d/${slug}">Stop comparing</a>`);
+    expect(html).toMatch(/<a href="\/d\/launch-plan\?version=2&amp;compare=1" data-compare="1" aria-current="true">/);
+    // Toolbar forms return to the comparison after a round trip.
+    expect(html).toContain(`<input type="hidden" name="next" value="/d/${slug}?version=2&amp;compare=1"/>`);
+  });
+
+  test('the plain view enters compare mode from the versions menu, orders the sides, and validates the parameter', async () => {
+    const html = await (await app.request(`/d/${slug}`, { headers: { cookie: ownerCookie } })).text();
+    // No standalone Compare menu outside compare mode; each other version's row carries a Compare button.
+    expect(html).not.toContain('id="compare-picker"');
+    expect(html).toContain(`<a class="version-compare" href="/d/${slug}?version=2&amp;compare=1"`);
+    expect((html.match(/class="version-compare"/g) ?? []).length).toBe(1);
+    expect(html).toContain(`id="artifact-frame"`);
+    expect(html).not.toContain(`id="compare-frame"`);
+    expect(html).toContain('"compare":null');
+    // From an older version, the Compare button on a newer row still puts the older one on the left.
+    const fromV1 = await (await app.request(`/d/${slug}?version=1`, { headers: { cookie: ownerCookie } })).text();
+    expect(fromV1).toContain(`<a class="version-compare" href="/d/${slug}?version=2&amp;compare=1"`);
+    const swapped = await (await app.request(`/d/${slug}?version=1&compare=2`, { headers: { cookie: ownerCookie } })).text();
+    expect(swapped).toContain('comparing v1 → v2 — commenting disabled');
+    expect(swapped).toContain('"compare":{"versionNumber":1}');
+    // An unknown base version is a 404 like an unknown ?version=; comparing a version with itself is the plain view.
+    expect((await app.request(`/d/${slug}?compare=9`, { headers: { cookie: ownerCookie } })).status).toBe(404);
+    expect((await app.request(`/d/${slug}?compare=abc`, { headers: { cookie: ownerCookie } })).status).toBe(404);
+    const self = await (await app.request(`/d/${slug}?version=2&compare=2`, { headers: { cookie: ownerCookie } })).text();
+    expect(self).not.toContain(`id="compare-frame"`);
+    expect(self).toContain('"compare":null');
+
+    const single = publishArtifact(db, config, getOrCreateUser(db, 'owner@example.com', new Date()), 'team-example', {
+      title: 'One Version Only',
+      html: '<body><p>solo</p></body>',
+    });
+    if (!single.ok) throw new Error(single.error);
+    const solo = await (await app.request(`/d/${single.documentId}`, { headers: { cookie: ownerCookie } })).text();
+    expect(solo).not.toContain('id="compare-picker"');
+  });
+
   test('findDocumentForViewer reports membership', async () => {
     expect(findDocumentForViewer(db, slug, ownerId)).toMatchObject({ isMember: true });
     db.update(documents).set({ visibility: 'public' }).where(eq(documents.id, slug)).run();
