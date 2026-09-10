@@ -23,7 +23,7 @@ import { describeTextAnchor } from '../../src/anchoring/text.js';
 import { createSession, getOrCreateUser } from '../../src/server/auth.js';
 import type { Config } from '../../src/server/config.js';
 import type { AppEnv } from '../../src/server/context.js';
-import { assets, documents, openDb, versions, type DB } from '../../src/server/db/index.js';
+import { assets, documents, openDb, users, versions, type DB } from '../../src/server/db/index.js';
 import { sessionAuth } from '../../src/server/middleware.js';
 import { apiRoutes } from '../../src/server/routes/api.js';
 import { indexVersionHtml, recomputeForVersion } from '../../src/server/services/anchorStates.js';
@@ -196,6 +196,45 @@ describe('api', () => {
   test('an unknown slug 404s the same way as a cross-team one', async () => {
     const res = await app.request('/api/docs/does-not-exist', { headers: { cookie: ownerCookie } });
     expect(res.status).toBe(404);
+  });
+
+  test('GET .../mentionable lists teammates other than the requester; outsiders 404', async () => {
+    const teammate = getOrCreateUser(db, 'teammate@example.com', new Date());
+    db.update(users).set({ name: 'Tessa Teammate' }).where(eq(users.id, teammate.id)).run();
+
+    const res = await app.request(`/api/docs/${slug}/mentionable`, { headers: { cookie: ownerCookie } });
+    expect(res.status).toBe(200);
+    const payload = (await res.json()) as { users: { email: string; name: string | null; avatarUrl: string }[] };
+    expect(payload.users).toEqual([{ email: 'teammate@example.com', name: 'Tessa Teammate', avatarUrl: expect.stringContaining('gravatar') }]);
+
+    const outsiderRes = await app.request(`/api/docs/${slug}/mentionable`, { headers: { cookie: outsiderCookie } });
+    expect(outsiderRes.status).toBe(404);
+  });
+
+  test('comments and replies list the teammates their body mentions', async () => {
+    const res = await app.request(
+      `/api/docs/${slug}/comments`,
+      authed(ownerCookie, {
+        body: 'ping @teammate@example.com and @ghost@example.com',
+        quotedText: QUOTE,
+        anchor: buildAnchor(QUOTE),
+        versionId: v1Id,
+      }),
+    );
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as { id: string; mentions: { email: string; name: string | null }[] };
+    expect(created.mentions).toEqual([{ email: 'teammate@example.com', name: 'Tessa Teammate' }]);
+
+    const replyRes = await app.request(`/api/comments/${created.id}/replies`, authed(ownerCookie, { body: 'cc @Teammate@Example.com' }));
+    expect(replyRes.status).toBe(201);
+    const reply = (await replyRes.json()) as { mentions: { email: string }[] };
+    expect(reply.mentions).toEqual([{ email: 'teammate@example.com', name: 'Tessa Teammate' }]);
+
+    const listRes = await app.request(`/api/docs/${slug}/comments`, { headers: { cookie: ownerCookie } });
+    const payload = (await listRes.json()) as { comments: { id: string; mentions: unknown[]; replies: { mentions: unknown[] }[] }[] };
+    const thread = payload.comments.find((c) => c.id === created.id)!;
+    expect(thread.mentions).toHaveLength(1);
+    expect(thread.replies[0]?.mentions).toHaveLength(1);
   });
 
   describe('validation', () => {

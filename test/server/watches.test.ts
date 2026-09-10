@@ -16,8 +16,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 
 import { getOrCreateUser } from '../../src/server/auth.js';
 import type { Config } from '../../src/server/config.js';
-import { comments, documents, openDb, versions, watches, type DB, type User } from '../../src/server/db/index.js';
+import { commentAnchorStates, comments, documents, openDb, versions, watches, type DB, type User } from '../../src/server/db/index.js';
 import { baseTestConfig, seedTeamWithDomain } from './teamTestUtils.js';
+import { createReply, createThreadComment } from '../../src/server/services/comments.js';
 import { publishArtifact } from '../../src/server/services/publish.js';
 import {
   autoWatch,
@@ -25,6 +26,7 @@ import {
   isWatching,
   runDigestSweep,
   setWatching,
+  watchForMention,
   type DigestEmail,
 } from '../../src/server/services/watches.js';
 
@@ -70,6 +72,7 @@ describe('watches', () => {
 
   beforeEach(() => {
     db.delete(watches).run();
+    db.delete(commentAnchorStates).run();
     db.delete(comments).run();
   });
 
@@ -99,6 +102,14 @@ describe('watches', () => {
       })
       .run();
     return id;
+  }
+
+  /** A thread through the real creation path (auto-watch + mention handling), like the API and MCP do. */
+  function postThread(docId: string, author: User, body: string, now: Date): string {
+    const document = db.select().from(documents).where(eq(documents.id, docId)).get()!;
+    const version = db.select().from(versions).where(eq(versions.id, `${docId}-v1`)).get()!;
+    const anchor = { v: 1 as const, exact: 'x', prefix: '', suffix: '', start: 0, docLength: 1 };
+    return createThreadComment(db, { document, version, authorId: author.id, body, quotedText: 'x', anchor, via: null, now }).id;
   }
 
   /** Sweep with a collecting sender; returns what got "sent". */
@@ -224,6 +235,54 @@ describe('watches', () => {
 
     const retried = await sweep(quietAfter(at(1)));
     expect(retried.map((e) => e.to)).toEqual(['alice@example.com']);
+  });
+
+  test('mentioning a teammate subscribes them — even over a sticky unwatch — and mails them that comment', async () => {
+    makeDoc('d-mention');
+    setWatching(db, 'd-mention', bob.id, false, T0);
+    addComment('d-mention', carol, at(1), 'earlier chatter');
+
+    postThread('d-mention', alice, 'Can you check this, @bob@example.com?', at(2));
+    expect(isWatching(db, 'd-mention', bob.id)).toBe(true);
+
+    const sent = await sweep(quietAfter(at(2)));
+    const bobEmail = sent.find((e) => e.to === 'bob@example.com')!;
+    expect(bobEmail.subject).toBe('1 new comment on "Doc d-mention" (you were mentioned)');
+    expect(bobEmail.text).toContain('alice@example.com mentioned you on "x":');
+    expect(bobEmail.text).toContain('Can you check this, @bob@example.com?');
+    // Re-subscribing by mention starts at the mention, not at the backlog.
+    expect(bobEmail.text).not.toContain('earlier chatter');
+  });
+
+  test('a mention in a reply subscribes the mentioned teammate too', async () => {
+    makeDoc('d-mention-reply');
+    const threadId = postThread('d-mention-reply', alice, 'thread start', at(1));
+    const parent = db.select().from(comments).where(eq(comments.id, threadId)).get()!;
+    createReply(db, { parent, authorId: bob.id, body: '@carol@example.com thoughts?', via: null, now: at(2) });
+    expect(isWatching(db, 'd-mention-reply', carol.id)).toBe(true);
+
+    const sent = await sweep(quietAfter(at(2)));
+    const carolEmail = sent.find((e) => e.to === 'carol@example.com')!;
+    expect(carolEmail.text).toContain('bob@example.com mentioned you in a reply:');
+    expect(carolEmail.text).not.toContain('thread start');
+  });
+
+  test('mentions of outsiders, strangers, or yourself subscribe nobody extra', () => {
+    makeDoc('d-mention-noop');
+    setWatching(db, 'd-mention-noop', alice.id, false, T0);
+    postThread('d-mention-noop', alice, 'cc @alice@example.com @nobody@elsewhere.org', at(1));
+    const rows = db.select().from(watches).where(eq(watches.documentId, 'd-mention-noop')).all();
+    // Alice's own sticky unwatch stands (self-mention is not a call-out); nobody else was added.
+    expect(rows.map((r) => [r.userId, r.state])).toEqual([[alice.id, 'unwatched']]);
+  });
+
+  test('watchForMention leaves an existing watcher\'s cursor alone', () => {
+    makeDoc('d-mention-keep');
+    autoWatch(db, 'd-mention-keep', bob.id, T0);
+    watchForMention(db, 'd-mention-keep', bob.id, at(5));
+    const row = db.select().from(watches).where(eq(watches.userId, bob.id)).get()!;
+    expect(row.state).toBe('watching');
+    expect(row.lastNotifiedAt).toEqual(T0);
   });
 
   test('the watches migration backfills existing creators and commenters', () => {

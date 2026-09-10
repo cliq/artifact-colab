@@ -11,6 +11,7 @@ import type { TextAnchor } from '../anchoring/text.js';
 import { AnnotatorBridge } from './bridge.js';
 import { initCompare } from './compare.js';
 import { FrameScaler } from './frameScale.js';
+import { MENTION_CSS, MENTION_OPEN_ATTR, MentionPicker, renderMentionBody, type Mentionable, type MentionDTO } from './mentions.js';
 import { initSidebarCollapse } from './sidebarCollapse.js';
 
 const POLL_INTERVAL_MS = 30_000;
@@ -50,6 +51,8 @@ interface ReplyDTO {
   author: AuthorDTO;
   createdAt: string;
   reactions: ReactionDTO[];
+  /** Teammates the body mentions as `@email`; painted as chips. */
+  mentions: MentionDTO[];
 }
 
 interface AnchorStateDTO {
@@ -71,6 +74,7 @@ interface ThreadDTO {
   resolvedBy: string | null;
   anchorState: AnchorStateDTO | null;
   reactions: ReactionDTO[];
+  mentions: MentionDTO[];
   replies: ReplyDTO[];
 }
 
@@ -212,11 +216,12 @@ function authorMeta(author: AuthorDTO, createdAt: string): HTMLElement {
 
 const NEWLINE_HINT = 'Enter to send · Shift+Enter for a line break';
 
-/** Slack-style submit: Enter sends, Shift/Alt+Enter inserts a line break. */
+/** Slack-style submit: Enter sends, Shift/Alt+Enter inserts a line break. While the @ picker is open, Enter picks instead. */
 function submitOnEnter(textarea: HTMLTextAreaElement, submit: () => void): void {
   textarea.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing) return;
     if (e.shiftKey || e.altKey) return;
+    if (textarea.hasAttribute(MENTION_OPEN_ATTR)) return;
     e.preventDefault();
     submit();
   });
@@ -237,7 +242,7 @@ function formatTime(iso: string): string {
 function injectStyles(): void {
   const style = document.createElement('style');
   style.setAttribute('data-artifact-viewer', '');
-  style.textContent = SIDEBAR_CSS;
+  style.textContent = SIDEBAR_CSS + MENTION_CSS;
   document.head.appendChild(style);
 }
 
@@ -317,11 +322,24 @@ function init(): void {
   let pendingAnchor: TextAnchor | null = null;
   let pendingQuotedText = '';
 
+  // --- mentions ---------------------------------------------------------
+  // Teammates the @ picker offers (everyone but the viewer). Loaded once;
+  // empty for guests on a public document, who then simply get no picker.
+  let mentionable: Mentionable[] = [];
+  const mentionPicker = new MentionPicker(() => mentionable);
+  void fetch(`/api/docs/${data.slug}/mentionable`)
+    .then((res) => (res.ok ? res.json() : { users: [] }))
+    .then((payload: { users: Mentionable[] }) => {
+      mentionable = payload.users;
+    })
+    .catch(() => undefined);
+
   // --- composer -------------------------------------------------------
   const composerQuote = el('div', { className: 'thread-quote' });
   const composerTextarea = el('textarea', {
-    attrs: { placeholder: 'Add a comment…', title: NEWLINE_HINT },
+    attrs: { placeholder: 'Add a comment… (@ to mention a teammate)', title: NEWLINE_HINT },
   });
+  mentionPicker.attach(composerTextarea);
   submitOnEnter(composerTextarea, () => void saveComment());
   const composerError = el('div', { className: 'ac-error' });
   const composer = el(
@@ -600,7 +618,7 @@ function init(): void {
           })
         : null;
 
-    const body = el('div', { className: 'thread-body', text: thread.body });
+    const body = el('div', { className: 'thread-body' }, renderMentionBody(thread.body, thread.mentions ?? []));
     const reactions = reactionsBar(thread.id, thread.reactions);
 
     const repliesEl = el('div', { className: 'replies' });
@@ -608,7 +626,7 @@ function init(): void {
       repliesEl.appendChild(
         el('div', { className: 'reply' }, [
           authorMeta(reply.author, reply.createdAt),
-          el('div', { className: 'reply-body', text: reply.body }),
+          el('div', { className: 'reply-body' }, renderMentionBody(reply.body, reply.mentions ?? [])),
           reactionsBar(reply.id, reply.reactions),
         ]),
       );
@@ -629,6 +647,7 @@ function init(): void {
     replyTextarea.addEventListener('click', () => {
       bridge.scrollToAnchor(thread.id);
     });
+    mentionPicker.attach(replyTextarea);
     async function submitReply(): Promise<void> {
       const value = replyTextarea.value.trim();
       if (!value) return;
@@ -795,6 +814,8 @@ function init(): void {
       if (replacement) {
         replacement.focus();
         if (caret) replacement.setSelectionRange(caret.start, caret.end);
+        // A picker open on the old textarea would now point at a detached node.
+        mentionPicker.refresh(replacement);
       }
     }
 

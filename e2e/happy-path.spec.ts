@@ -12,6 +12,8 @@ import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { callTool, extractDocumentId, getArtifactFrame, phraseRectInFrame, selectPhraseInFrame, waitForLoginCode } from './helpers.js';
 
 const ALICE = 'alice@example.com';
+const BOB = 'bob@example.com';
+const CAROL = 'carol@example.com';
 
 const LIVE_SENTENCE = 'The live region initial sentence stays here.';
 const REWRITTEN_SENTENCE = 'Rewritten intro sentence.';
@@ -206,6 +208,79 @@ test.describe('happy path', () => {
     // Clear the draft and deselect the thread (a focused comment paints as
     // ac-focused instead of ac-open, which later tests assert on).
     await textarea.fill('');
+    await page.locator('main h1').click();
+    await expect(card).not.toHaveClass(/focused/);
+  });
+
+  test('@ opens a teammate picker; the mentioned teammate is watching the artifact', async ({ browser }) => {
+    // Bob and Carol need accounts before alice can add them to the team directly.
+    const signIn = async (email: string): Promise<{ context: BrowserContext; page: Page }> => {
+      const ctx = await browser.newContext();
+      const p = await ctx.newPage();
+      await p.goto('/signin');
+      await p.fill('#email-input', email);
+      await p.click('#email-form button[type="submit"]');
+      await expect(p.locator('#code-form')).toBeVisible();
+      await p.fill('#code-input', await waitForLoginCode(email));
+      await p.click('#code-form button[type="submit"]');
+      await p.waitForURL((url) => url.pathname === '/');
+      return { context: ctx, page: p };
+    };
+    const { context: bobContext, page: bobPage } = await signIn(BOB);
+    await (await signIn(CAROL)).context.close();
+
+    const adminPage = await context.newPage();
+    await adminPage.goto('/admin');
+    await adminPage.locator('a[href^="/admin/teams/"]').first().click();
+    await adminPage.fill('#invite-email', BOB);
+    await adminPage.click('#invite-email >> xpath=ancestor::form//button[@type="submit"]');
+    await expect(adminPage.locator('main')).toContainText(`${BOB} was added to the team.`);
+    // A second candidate, so arrow-key navigation has somewhere to go.
+    await adminPage.fill('#invite-email', CAROL);
+    await adminPage.click('#invite-email >> xpath=ancestor::form//button[@type="submit"]');
+    await expect(adminPage.locator('main')).toContainText(`${CAROL} was added to the team.`);
+    await adminPage.close();
+
+    // The picker's roster loads with the page.
+    await page.goto(`/d/${slug}`);
+    const card = page.locator('.thread-card', { hasText: commentBody });
+    await card.click();
+    const textarea = card.locator('.reply-form textarea');
+    await textarea.click();
+    await page.keyboard.type('Looping in @');
+
+    const picker = page.locator('.mention-picker');
+    await expect(picker).toBeVisible();
+    const options = picker.locator('.mention-option');
+    await expect(options).toHaveCount(2);
+    // Down moves the highlight and it stays moved (the keyup must not reset it).
+    await expect(options.nth(0)).toHaveClass(/selected/);
+    await page.keyboard.press('ArrowDown');
+    await page.waitForTimeout(100);
+    await expect(options.nth(1)).toHaveClass(/selected/);
+    await page.keyboard.press('ArrowUp');
+    await expect(options.nth(0)).toHaveClass(/selected/);
+
+    await page.keyboard.type('bo');
+    await expect(options).toHaveCount(1);
+    await expect(options).toContainText(BOB);
+
+    // Enter picks (rather than sending) while the picker is open, then sends.
+    await page.keyboard.press('Enter');
+    await expect(picker).toBeHidden();
+    await expect(textarea).toHaveValue(`Looping in @${BOB} `);
+    await page.keyboard.press('Enter');
+
+    const reply = card.locator('.reply', { hasText: 'Looping in' });
+    await expect(reply).toBeVisible();
+    await expect(reply.locator('.mention')).toHaveText(`@${BOB}`);
+    await expect(reply.locator('.mention')).toHaveAttribute('title', BOB);
+
+    // Being mentioned subscribed bob to the artifact's comment digests.
+    await bobPage.goto(`/d/${slug}`);
+    await expect(bobPage.locator('.watch-btn')).toHaveText('Watching ✓');
+    await bobContext.close();
+
     await page.locator('main h1').click();
     await expect(card).not.toHaveClass(/focused/);
   });

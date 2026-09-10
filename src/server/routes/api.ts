@@ -17,6 +17,7 @@ import { isReactionEmoji, REACTION_EMOJIS } from '../../shared/reactions.js';
 import { assetsForDocument, relinkAssets, stripBaseHref } from '../services/assets.js';
 import { createReply, createThreadComment } from '../services/comments.js';
 import { gravatarUrl } from '../services/gravatar.js';
+import { resolveMentions } from '../services/watches.js';
 import { buildZip, type ZipEntry } from '../services/zip.js';
 
 const anchorSchema = z.object({
@@ -180,12 +181,27 @@ export interface ReactionDTO {
   reactedByMe: boolean;
 }
 
+/**
+ * A teammate the comment body mentions as `@email`. The client paints those
+ * tokens as chips showing the display name; emails the body names that don't
+ * resolve to a member are not listed and stay plain text.
+ */
+export interface MentionDTO {
+  email: string;
+  name: string | null;
+}
+
+function mentionsFor(db: DB, body: string, teamId: string): MentionDTO[] {
+  return resolveMentions(db, teamId, body).map((user) => ({ email: user.email, name: user.name }));
+}
+
 interface ThreadReplyDTO {
   id: string;
   body: string;
   author: AuthorDTO;
   createdAt: Date;
   reactions: ReactionDTO[];
+  mentions: MentionDTO[];
 }
 
 /**
@@ -245,6 +261,7 @@ export interface ThreadDTO {
   resolvedBy: string | null;
   anchorState: AnchorStateDTO | null;
   reactions: ReactionDTO[];
+  mentions: MentionDTO[];
   replies: ThreadReplyDTO[];
 }
 
@@ -279,12 +296,14 @@ export function buildThread(db: DB, comment: Comment, versionId: string | undefi
       ? { state: anchorStateRow.state, start: anchorStateRow.start, end: anchorStateRow.end }
       : null,
     reactions: reactions.get(comment.id) ?? [],
+    mentions: mentionsFor(db, comment.body, teamId),
     replies: replyRows.map((reply) => ({
       id: reply.id,
       body: reply.body,
       author: authorFor(db, reply, teamId),
       createdAt: reply.createdAt,
       reactions: reactions.get(reply.id) ?? [],
+      mentions: mentionsFor(db, reply.body, teamId),
     })),
   };
 }
@@ -356,6 +375,30 @@ apiRoutes.get('/api/docs/:slug/comments', (c) => {
   return c.json({ comments: threads });
 });
 
+/**
+ * Who the `@` picker offers: the document's team members other than the
+ * requester. Only members get the list — a guest on a public document can
+ * comment but is not shown the team roster.
+ */
+apiRoutes.get('/api/docs/:slug/mentionable', (c) => {
+  const db = c.get('db');
+  const user = c.get('user');
+  const access = findDocumentForViewer(db, c.req.param('slug'), user.id);
+  if (!access) return c.json({ error: 'not found' }, 404);
+  if (!access.isMember) return c.json({ users: [] });
+
+  const rows = db
+    .select({ email: users.email, name: users.name })
+    .from(teamMembers)
+    .innerJoin(users, eq(users.id, teamMembers.userId))
+    .where(and(eq(teamMembers.teamId, access.document.teamId), ne(teamMembers.userId, user.id)))
+    .orderBy(asc(users.email))
+    .all();
+  return c.json({
+    users: rows.map((row) => ({ email: row.email, name: row.name, avatarUrl: gravatarUrl(row.email) })),
+  });
+});
+
 apiRoutes.post('/api/docs/:slug/comments', async (c) => {
   const db = c.get('db');
   const user = c.get('user');
@@ -411,7 +454,16 @@ apiRoutes.post('/api/comments/:id/replies', async (c) => {
 
   const reply = createReply(db, { parent, authorId: user.id, body: parsed.data.body, via: null });
 
-  return c.json({ id: reply.id, body: reply.body, author: authorFor(db, reply, doc.teamId), createdAt: reply.createdAt }, 201);
+  return c.json(
+    {
+      id: reply.id,
+      body: reply.body,
+      author: authorFor(db, reply, doc.teamId),
+      createdAt: reply.createdAt,
+      mentions: mentionsFor(db, reply.body, doc.teamId),
+    },
+    201,
+  );
 });
 
 apiRoutes.post('/api/comments/:id/resolve', (c) => {

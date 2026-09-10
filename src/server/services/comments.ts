@@ -3,7 +3,9 @@
  * (token-authed). Both paths insert the same rows, compute the same anchor
  * states, and auto-watch the author; they differ only in where the anchor
  * comes from (the browser selection vs. a quote located server-side) and in
- * whether the comment is attributed to an access token.
+ * whether the comment is attributed to an access token. Both also subscribe
+ * every teammate the body mentions (`@email`), so the mention reaches them by
+ * digest.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -13,9 +15,9 @@ import { eq } from 'drizzle-orm';
 import { normalizeString } from '../../anchoring/normalize.js';
 import { describeTextAnchor, type TextAnchor } from '../../anchoring/text.js';
 import type { DB } from '../db/index.js';
-import { comments, type Comment, type Document, type Version } from '../db/schema.js';
+import { comments, documents, type Comment, type Document, type Version } from '../db/schema.js';
 import { computeForComment, computeForCommentVersion } from './anchorStates.js';
-import { autoWatch } from './watches.js';
+import { autoWatch, resolveMentions, watchForMention } from './watches.js';
 
 /** The access token a comment was posted through — how the UI tells one agent from another. */
 export interface CommentVia {
@@ -62,6 +64,7 @@ export function createThreadComment(
   computeForCommentVersion(db, id, input.version.id);
   computeForComment(db, id);
   autoWatch(db, input.document.id, input.authorId, now);
+  watchMentioned(db, input.document.id, input.document.teamId, input.authorId, input.body, now);
 
   const created = db.select().from(comments).where(eq(comments.id, id)).get();
   if (!created) throw new Error(`comment ${id} vanished after insert`);
@@ -95,10 +98,19 @@ export function createReply(
     .run();
 
   autoWatch(db, input.parent.documentId, input.authorId, now);
+  const doc = db.select({ teamId: documents.teamId }).from(documents).where(eq(documents.id, input.parent.documentId)).get();
+  if (doc) watchMentioned(db, input.parent.documentId, doc.teamId, input.authorId, input.body, now);
 
   const created = db.select().from(comments).where(eq(comments.id, id)).get();
   if (!created) throw new Error(`reply ${id} vanished after insert`);
   return created;
+}
+
+/** Subscribe every teammate the body mentions, except the author (already auto-watched, sticky opt-out respected). */
+function watchMentioned(db: DB, documentId: string, teamId: string, authorId: string, body: string, now: Date): void {
+  for (const user of resolveMentions(db, teamId, body)) {
+    if (user.id !== authorId) watchForMention(db, documentId, user.id, now);
+  }
 }
 
 export type QuoteLocation =

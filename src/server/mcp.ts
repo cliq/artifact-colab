@@ -233,7 +233,9 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         'Two modes. (1) New thread: pass document_id and quoted_text — the passage of the current version the comment is about, ' +
         'quoted exactly as it reads in the rendered page (read it with get_artifact first). Markup is ignored and whitespace/curly quotes ' +
         'are normalized, but the quote must occur exactly once; if it appears several times, extend it with surrounding words. ' +
-        '(2) Reply: pass comment_id of an existing thread (from get_comments); passing a reply id lands the reply on its thread.',
+        '(2) Reply: pass comment_id of an existing thread (from get_comments); passing a reply id lands the reply on its thread. ' +
+        'To tag a teammate, write their email with a leading @ in the body (e.g. "@bob@example.com please review"): they are ' +
+        'subscribed to the artifact and receive the comment by email.',
       inputSchema: z.object({
         body: z.string().min(1).max(10000).describe('The comment text (plain text; line breaks are preserved)'),
         document_id: z.string().optional().describe('Document to open a new thread on; required together with quoted_text'),
