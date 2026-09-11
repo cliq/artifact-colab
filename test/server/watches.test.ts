@@ -276,6 +276,23 @@ describe('watches', () => {
     expect(rows.map((r) => [r.userId, r.state])).toEqual([[alice.id, 'unwatched']]);
   });
 
+  test('a mention on a private document subscribes nobody and leaks nothing by email', async () => {
+    makeDoc('d-mention-private');
+    db.update(documents).set({ visibility: 'private' }).where(eq(documents.id, 'd-mention-private')).run();
+
+    // Bob can't open the document, so tagging him must not subscribe him: the
+    // sweep mails every 'watching' row without re-checking access.
+    const threadId = postThread('d-mention-private', alice, 'secret numbers, @bob@example.com?', at(1));
+    const parent = db.select().from(comments).where(eq(comments.id, threadId)).get()!;
+    createReply(db, { parent, authorId: alice.id, body: 'and @carol@example.com', via: null, now: at(2) });
+
+    const rows = db.select().from(watches).where(eq(watches.documentId, 'd-mention-private')).all();
+    expect(rows.map((r) => r.userId)).toEqual([alice.id]);
+
+    const sent = await sweep(quietAfter(at(2)));
+    expect(sent).toEqual([]);
+  });
+
   test('watchForMention leaves an existing watcher\'s cursor alone', () => {
     makeDoc('d-mention-keep');
     autoWatch(db, 'd-mention-keep', bob.id, T0);

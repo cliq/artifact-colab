@@ -237,6 +237,35 @@ describe('api', () => {
     expect(thread.replies[0]?.mentions).toHaveLength(1);
   });
 
+  test('on a private document nobody is mentionable and mentions resolve to nobody', async () => {
+    db.update(documents).set({ visibility: 'private' }).where(eq(documents.id, slug)).run();
+    try {
+      const pickerRes = await app.request(`/api/docs/${slug}/mentionable`, { headers: { cookie: ownerCookie } });
+      expect(pickerRes.status).toBe(200);
+      expect(await pickerRes.json()).toEqual({ users: [] });
+
+      const res = await app.request(
+        `/api/docs/${slug}/comments`,
+        authed(ownerCookie, {
+          body: 'for my eyes only, @teammate@example.com',
+          quotedText: QUOTE,
+          anchor: buildAnchor(QUOTE),
+          versionId: v1Id,
+        }),
+      );
+      expect(res.status).toBe(201);
+      const created = (await res.json()) as { id: string; mentions: unknown[] };
+      // The teammate can't open the document, so the address stays plain text.
+      expect(created.mentions).toEqual([]);
+
+      const replyRes = await app.request(`/api/comments/${created.id}/replies`, authed(ownerCookie, { body: '@teammate@example.com' }));
+      expect(replyRes.status).toBe(201);
+      expect(((await replyRes.json()) as { mentions: unknown[] }).mentions).toEqual([]);
+    } finally {
+      db.update(documents).set({ visibility: 'team' }).where(eq(documents.id, slug)).run();
+    }
+  });
+
   describe('validation', () => {
     test('an empty comment body is rejected', async () => {
       const res = await app.request(

@@ -64,7 +64,7 @@ export function createThreadComment(
   computeForCommentVersion(db, id, input.version.id);
   computeForComment(db, id);
   autoWatch(db, input.document.id, input.authorId, now);
-  watchMentioned(db, input.document.id, input.document.teamId, input.authorId, input.body, now);
+  watchMentioned(db, input.document, input.authorId, input.body, now);
 
   const created = db.select().from(comments).where(eq(comments.id, id)).get();
   if (!created) throw new Error(`comment ${id} vanished after insert`);
@@ -98,18 +98,23 @@ export function createReply(
     .run();
 
   autoWatch(db, input.parent.documentId, input.authorId, now);
-  const doc = db.select({ teamId: documents.teamId }).from(documents).where(eq(documents.id, input.parent.documentId)).get();
-  if (doc) watchMentioned(db, input.parent.documentId, doc.teamId, input.authorId, input.body, now);
+  const doc = db.select().from(documents).where(eq(documents.id, input.parent.documentId)).get();
+  if (doc) watchMentioned(db, doc, input.authorId, input.body, now);
 
   const created = db.select().from(comments).where(eq(comments.id, id)).get();
   if (!created) throw new Error(`reply ${id} vanished after insert`);
   return created;
 }
 
-/** Subscribe every teammate the body mentions, except the author (already auto-watched, sticky opt-out respected). */
-function watchMentioned(db: DB, documentId: string, teamId: string, authorId: string, body: string, now: Date): void {
-  for (const user of resolveMentions(db, teamId, body)) {
-    if (user.id !== authorId) watchForMention(db, documentId, user.id, now);
+/**
+ * Subscribe every teammate the body mentions, except the author (already
+ * auto-watched, sticky opt-out respected). `resolveMentions` only yields people
+ * who can open the document, so a mention on a private one never subscribes a
+ * teammate to comments they aren't allowed to read.
+ */
+function watchMentioned(db: DB, document: Document, authorId: string, body: string, now: Date): void {
+  for (const user of resolveMentions(db, document, body)) {
+    if (user.id !== authorId) watchForMention(db, document.id, user.id, now);
   }
 }
 

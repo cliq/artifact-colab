@@ -10,7 +10,7 @@ import { and, eq, gt, inArray } from 'drizzle-orm';
 
 import { extractMentionEmails } from '../../shared/mentions.js';
 import type { DB } from '../db/index.js';
-import { comments, documents, teamMembers, users, watches, type Comment, type User } from '../db/schema.js';
+import { comments, documents, teamMembers, users, watches, type Comment, type Document, type User } from '../db/schema.js';
 
 export const DIGEST_QUIET_MS = 5 * 60 * 1000;
 
@@ -52,17 +52,23 @@ export function watchForMention(db: DB, documentId: string, userId: string, comm
 
 /**
  * The team members a comment body mentions (`@email`), looked up by email.
- * Outsiders — people who can't see the document — never resolve, so an `@`
- * in front of a stranger's address is just text.
+ * Only people who can open the document resolve: outsiders never do, and on a
+ * private document nobody but its creator does. A watch created from a mention
+ * feeds the digest sweep, which mails every 'watching' row without re-checking
+ * access — so resolving someone who can't see the document would leak its
+ * comments to them by email. An `@` in front of anyone else's address is just
+ * text.
  */
-export function resolveMentions(db: DB, teamId: string, body: string): User[] {
+export function resolveMentions(db: DB, document: Pick<Document, 'teamId' | 'visibility' | 'createdBy'>, body: string): User[] {
   const emails = extractMentionEmails(body);
   if (emails.length === 0) return [];
+  const conditions = [inArray(users.email, emails)];
+  if (document.visibility === 'private') conditions.push(eq(users.id, document.createdBy));
   return db
     .select({ user: users })
     .from(users)
-    .innerJoin(teamMembers, and(eq(teamMembers.userId, users.id), eq(teamMembers.teamId, teamId)))
-    .where(inArray(users.email, emails))
+    .innerJoin(teamMembers, and(eq(teamMembers.userId, users.id), eq(teamMembers.teamId, document.teamId)))
+    .where(and(...conditions))
     .all()
     .map((row) => row.user);
 }

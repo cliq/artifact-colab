@@ -191,8 +191,8 @@ export interface MentionDTO {
   name: string | null;
 }
 
-function mentionsFor(db: DB, body: string, teamId: string): MentionDTO[] {
-  return resolveMentions(db, teamId, body).map((user) => ({ email: user.email, name: user.name }));
+function mentionsFor(db: DB, body: string, document: Document): MentionDTO[] {
+  return resolveMentions(db, document, body).map((user) => ({ email: user.email, name: user.name }));
 }
 
 interface ThreadReplyDTO {
@@ -269,7 +269,7 @@ export interface ThreadDTO {
  * Build the full thread DTO for a top-level comment, including its anchor
  * state for `versionId`. `viewerId` flags the viewer's own reactions.
  */
-export function buildThread(db: DB, comment: Comment, versionId: string | undefined, teamId: string, viewerId?: string): ThreadDTO {
+export function buildThread(db: DB, comment: Comment, versionId: string | undefined, document: Document, viewerId?: string): ThreadDTO {
   const anchorStateRow = versionId
     ? db
         .select()
@@ -287,7 +287,7 @@ export function buildThread(db: DB, comment: Comment, versionId: string | undefi
     quotedText: comment.quotedText,
     anchor: parseAnchorJson(comment.anchor),
     status: comment.status,
-    author: authorFor(db, comment, teamId),
+    author: authorFor(db, comment, document.teamId),
     createdAt: comment.createdAt,
     createdVersionId: comment.createdVersionId,
     resolvedAt: comment.resolvedAt,
@@ -296,14 +296,14 @@ export function buildThread(db: DB, comment: Comment, versionId: string | undefi
       ? { state: anchorStateRow.state, start: anchorStateRow.start, end: anchorStateRow.end }
       : null,
     reactions: reactions.get(comment.id) ?? [],
-    mentions: mentionsFor(db, comment.body, teamId),
+    mentions: mentionsFor(db, comment.body, document),
     replies: replyRows.map((reply) => ({
       id: reply.id,
       body: reply.body,
-      author: authorFor(db, reply, teamId),
+      author: authorFor(db, reply, document.teamId),
       createdAt: reply.createdAt,
       reactions: reactions.get(reply.id) ?? [],
-      mentions: mentionsFor(db, reply.body, teamId),
+      mentions: mentionsFor(db, reply.body, document),
     })),
   };
 }
@@ -370,7 +370,7 @@ apiRoutes.get('/api/docs/:slug/comments', (c) => {
   if (!doc) return c.json({ error: 'not found' }, 404);
 
   const versionId = c.req.query('version') ?? doc.currentVersionId ?? undefined;
-  const threads = sortTopLevel(topLevelCommentsFor(db, doc.id)).map((row) => buildThread(db, row, versionId, doc.teamId, user.id));
+  const threads = sortTopLevel(topLevelCommentsFor(db, doc.id)).map((row) => buildThread(db, row, versionId, doc, user.id));
 
   return c.json({ comments: threads });
 });
@@ -385,7 +385,9 @@ apiRoutes.get('/api/docs/:slug/mentionable', (c) => {
   const user = c.get('user');
   const access = findDocumentForViewer(db, c.req.param('slug'), user.id);
   if (!access) return c.json({ error: 'not found' }, 404);
-  if (!access.isMember) return c.json({ users: [] });
+  // Only people who can open the document are mentionable: outsiders see
+  // nobody, and on a private document neither do teammates' addresses appear.
+  if (!access.isMember || access.document.visibility === 'private') return c.json({ users: [] });
 
   const rows = db
     .select({ email: users.email, name: users.name })
@@ -433,7 +435,7 @@ apiRoutes.post('/api/docs/:slug/comments', async (c) => {
     via: null,
   });
 
-  return c.json(buildThread(db, created, version.id, doc.teamId, user.id), 201);
+  return c.json(buildThread(db, created, version.id, doc, user.id), 201);
 });
 
 apiRoutes.post('/api/comments/:id/replies', async (c) => {
@@ -460,7 +462,7 @@ apiRoutes.post('/api/comments/:id/replies', async (c) => {
       body: reply.body,
       author: authorFor(db, reply, doc.teamId),
       createdAt: reply.createdAt,
-      mentions: mentionsFor(db, reply.body, doc.teamId),
+      mentions: mentionsFor(db, reply.body, doc),
     },
     201,
   );
@@ -481,7 +483,7 @@ apiRoutes.post('/api/comments/:id/resolve', (c) => {
   const updated = db.select().from(comments).where(eq(comments.id, found.comment.id)).get();
   if (!updated) return c.json({ error: 'internal error' }, 500);
 
-  return c.json(buildThread(db, updated, found.document.currentVersionId ?? undefined, found.document.teamId, user.id));
+  return c.json(buildThread(db, updated, found.document.currentVersionId ?? undefined, found.document, user.id));
 });
 
 apiRoutes.post('/api/comments/:id/reopen', (c) => {
@@ -495,7 +497,7 @@ apiRoutes.post('/api/comments/:id/reopen', (c) => {
   const updated = db.select().from(comments).where(eq(comments.id, found.comment.id)).get();
   if (!updated) return c.json({ error: 'internal error' }, 500);
 
-  return c.json(buildThread(db, updated, found.document.currentVersionId ?? undefined, found.document.teamId, user.id));
+  return c.json(buildThread(db, updated, found.document.currentVersionId ?? undefined, found.document, user.id));
 });
 
 /**
@@ -529,7 +531,7 @@ apiRoutes.put('/api/comments/:id/reactions/:emoji', (c) => {
     .values({ commentId: target.comment.id, userId: user.id, emoji: c.req.param('emoji'), createdAt: new Date() })
     .onConflictDoNothing()
     .run();
-  return c.json(buildThread(db, target.topLevel, target.document.currentVersionId ?? undefined, target.document.teamId, user.id));
+  return c.json(buildThread(db, target.topLevel, target.document.currentVersionId ?? undefined, target.document, user.id));
 });
 
 apiRoutes.delete('/api/comments/:id/reactions/:emoji', (c) => {
@@ -547,7 +549,7 @@ apiRoutes.delete('/api/comments/:id/reactions/:emoji', (c) => {
       ),
     )
     .run();
-  return c.json(buildThread(db, target.topLevel, target.document.currentVersionId ?? undefined, target.document.teamId, user.id));
+  return c.json(buildThread(db, target.topLevel, target.document.currentVersionId ?? undefined, target.document, user.id));
 });
 
 /**
@@ -579,7 +581,7 @@ apiRoutes.get('/api/docs/:slug/export.json', (c) => {
   if (!doc) return c.json({ error: 'not found' }, 404);
 
   const versionId = doc.currentVersionId ?? undefined;
-  const threads = sortTopLevel(topLevelCommentsFor(db, doc.id)).map((row) => buildThread(db, row, versionId, doc.teamId));
+  const threads = sortTopLevel(topLevelCommentsFor(db, doc.id)).map((row) => buildThread(db, row, versionId, doc));
   const ctx = exportContext(db, config.baseUrl, doc);
 
   return c.json({
@@ -598,7 +600,7 @@ apiRoutes.get('/api/docs/:slug/export.json', (c) => {
 /** The Markdown rendering of a document's comment threads, shared by export.md and the zip export. */
 function commentsMarkdown(db: DB, baseUrl: string, doc: Document): string {
   const versionId = doc.currentVersionId ?? undefined;
-  const threads = sortTopLevel(topLevelCommentsFor(db, doc.id)).map((row) => buildThread(db, row, versionId, doc.teamId));
+  const threads = sortTopLevel(topLevelCommentsFor(db, doc.id)).map((row) => buildThread(db, row, versionId, doc));
   const open = threads.filter((thread) => thread.status !== 'resolved');
   const resolved = threads.filter((thread) => thread.status === 'resolved');
 

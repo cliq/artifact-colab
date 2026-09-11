@@ -207,7 +207,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       if (!doc) return toolError(`unknown document_id: ${document_id}`);
       let topLevel = sortTopLevel(topLevelCommentsFor(db, doc.id));
       if (status) topLevel = topLevel.filter((c) => c.status === status);
-      const threads = topLevel.map((c) => buildThread(db, c, doc.currentVersionId ?? undefined, doc.teamId));
+      const threads = topLevel.map((c) => buildThread(db, c, doc.currentVersionId ?? undefined, doc));
       const ctx = exportContext(db, config.baseUrl, doc);
       const payload = {
         document: {
