@@ -12,6 +12,7 @@ import { createMcpHandler, type AuthInfo, type CallToolResult, McpServer } from 
 import { Hono } from 'hono';
 import { z } from 'zod';
 
+import { touchToken } from './auth.js';
 import type { Config } from './config.js';
 import type { AppEnv } from './context.js';
 import type { DB } from './db/index.js';
@@ -45,6 +46,8 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
   const teamId = token.teamId;
   const via: CommentVia = { tokenId: token.id, tokenLabel: token.label };
   const server = new McpServer({ name: 'artifact-colab', version: '1.0.0' });
+  /** Only tool calls count as token use — the connect handshake (initialize, tools/list) does not. */
+  const used = () => touchToken(db, token.id, new Date());
 
   server.registerTool(
     'publish_artifact',
@@ -89,6 +92,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       }),
     },
     async ({ title, html, markdown, document_id, visibility, assets: incomingAssets }) => {
+      used();
       const decodedAssets: IncomingAsset[] = [];
       for (const a of incomingAssets ?? []) {
         const data = Buffer.from(a.data_base64, 'base64');
@@ -146,6 +150,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       }),
     },
     async ({ document_id, version }) => {
+      used();
       const doc = findDocumentInTeam(db, document_id, teamId, user.id);
       if (!doc) return toolError(`unknown document_id: ${document_id}`);
 
@@ -203,6 +208,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       }),
     },
     async ({ document_id, status }) => {
+      used();
       const doc = findDocumentInTeam(db, document_id, teamId, user.id);
       if (!doc) return toolError(`unknown document_id: ${document_id}`);
       let topLevel = sortTopLevel(topLevelCommentsFor(db, doc.id));
@@ -248,6 +254,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       }),
     },
     async ({ body, document_id, quoted_text, comment_id }) => {
+      used();
       if (comment_id !== undefined) {
         if (quoted_text !== undefined) {
           return toolError('pass either comment_id (to reply) or document_id + quoted_text (to open a new thread), not both');
@@ -326,6 +333,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       inputSchema: z.object({ comment_id: z.string() }),
     },
     async ({ comment_id }) => {
+      used();
       const owned = findOwnedTopLevelComment(db, comment_id, { teamId, userId: user.id });
       if (!owned) return toolError(`unknown comment_id (or not a top-level comment): ${comment_id}`);
       db.update(comments)
@@ -346,6 +354,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       inputSchema: z.object({ document_id: z.string() }),
     },
     async ({ document_id }) => {
+      used();
       const doc = findDocumentInTeam(db, document_id, teamId, user.id);
       if (!doc) return toolError(`unknown document_id: ${document_id}`);
       if (doc.createdBy !== user.id) {

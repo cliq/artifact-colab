@@ -13,7 +13,7 @@ import { createApp } from '../../src/server/app.js';
 import { createToken, getOrCreateUser } from '../../src/server/auth.js';
 import type { Config } from '../../src/server/config.js';
 import type { AppEnv } from '../../src/server/context.js';
-import { assets, comments, openDb, versions, type DB } from '../../src/server/db/index.js';
+import { assets, comments, openDb, tokens, versions, type DB } from '../../src/server/db/index.js';
 import { indexVersionHtml } from '../../src/server/services/anchorStates.js';
 import { baseTestConfig, seedTeamWithDomain } from './teamTestUtils.js';
 import { inlineAssets } from '../../src/server/services/assets.js';
@@ -94,6 +94,17 @@ describe('mcp', () => {
     const badAuth = await rpc('tools/list', {}, 'acp_definitelywrong');
     expect(badAuth.status).toBe(401);
     expect(badAuth.headers.get('www-authenticate')).toBe('Bearer');
+  });
+
+  test('only tool calls record token use, not the connect handshake', async () => {
+    const lastUsed = () => db.select({ at: tokens.lastUsedAt }).from(tokens).where(eq(tokens.id, patId)).get()?.at ?? null;
+    expect(lastUsed()).toBeNull();
+
+    await rpcResult(await rpc('tools/list', {}));
+    expect(lastUsed()).toBeNull();
+
+    await callTool('get_artifact', { document_id: 'nope' });
+    expect(lastUsed()).not.toBeNull();
   });
 
   test('lists the six tools', async () => {

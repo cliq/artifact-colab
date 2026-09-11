@@ -20,6 +20,7 @@ import { Buffer } from 'node:buffer';
 
 import { Hono } from 'hono';
 
+import { touchToken } from '../auth.js';
 import type { AppEnv } from '../context.js';
 import { bearerAuth } from '../middleware.js';
 import type { IncomingAsset } from '../services/assets.js';
@@ -34,6 +35,7 @@ publishRoutes.use('/api/docs/:slug/raw', bearerAuth());
 
 publishRoutes.get('/api/docs/:slug/raw', (c) => {
   const db = c.get('db');
+  touchToken(db, c.get('token').id, new Date());
   const doc = findDocumentInTeam(db, c.req.param('slug'), c.get('tokenTeamId'), c.get('user').id);
   if (!doc) return c.json({ error: 'not found' }, 404);
 
@@ -54,6 +56,7 @@ publishRoutes.get('/api/docs/:slug/raw', (c) => {
 });
 
 publishRoutes.post('/api/publish', async (c) => {
+  touchToken(c.get('db'), c.get('token').id, new Date());
   let body: Record<string, string | File | (string | File)[]>;
   try {
     body = await c.req.parseBody({ all: true });

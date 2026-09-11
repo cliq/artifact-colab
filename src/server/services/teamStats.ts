@@ -4,7 +4,8 @@
  * totals for the /admin overview. Read-only; nothing here writes.
  *
  * "Last activity" is derived from what the app already records — publishes,
- * comments, and MCP token use. Plain page views are not tracked, so a team
+ * comments, and MCP tool calls (the connect handshake does not count). Plain
+ * page views are not tracked, so a team
  * that only reads never bumps it.
  */
 
@@ -29,7 +30,7 @@ export interface TeamStats {
   storageBytes: number;
   lastPublishedAt: Date | null;
   lastCommentAt: Date | null;
-  /** Most recent MCP request through one of the team's tokens. */
+  /** Most recent MCP tool call or REST publish/fetch through one of the team's tokens. */
   lastAgentAccessAt: Date | null;
   /** Latest of the three timestamps above. */
   lastActivityAt: Date | null;

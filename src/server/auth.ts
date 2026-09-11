@@ -178,6 +178,10 @@ export function revokeToken(db: DB, userId: string, tokenId: string): boolean {
  * scoped by the token's team, not the user. The owner must still be a member
  * of that team: removal revokes the team's tokens, but a token that survived
  * (e.g. a partially applied manual cleanup) must not outlive the membership.
+ *
+ * Does NOT record use: MCP clients hit the endpoint on every (re)connect for
+ * the initialize / tools/list handshake, and that would make every team look
+ * active. Callers that do real work call `touchToken` themselves.
  */
 export function getTokenAuth(db: DB, bearer: string, now: Date): { user: User; token: Token } | null {
   const tokenHash = sha256hex(bearer);
@@ -195,8 +199,15 @@ export function getTokenAuth(db: DB, bearer: string, now: Date): { user: User; t
     return null;
   }
 
-  db.update(tokens).set({ lastUsedAt: now }).where(eq(tokens.id, token.id)).run();
-
   const [user] = db.select().from(users).where(eq(users.id, token.userId)).all();
   return user ? { user, token } : null;
+}
+
+/**
+ * Records that a token did something meaningful — an MCP tool call or a REST
+ * publish/fetch — which feeds the "last used" column on the tokens page and
+ * the team's "last activity" in the admin area.
+ */
+export function touchToken(db: DB, tokenId: string, now: Date): void {
+  db.update(tokens).set({ lastUsedAt: now }).where(eq(tokens.id, tokenId)).run();
 }
