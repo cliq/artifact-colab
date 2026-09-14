@@ -11,6 +11,7 @@ import type { TextAnchor } from '../anchoring/text.js';
 import { AnnotatorBridge } from './bridge.js';
 import { initCompare } from './compare.js';
 import { FrameScaler } from './frameScale.js';
+import { loadFrame, persistFrameStorage } from './frameStorage.js';
 import { MENTION_CSS, MENTION_OPEN_ATTR, MentionPicker, renderMentionBody, type Mentionable, type MentionDTO } from './mentions.js';
 import { initSidebarCollapse } from './sidebarCollapse.js';
 
@@ -309,7 +310,7 @@ function init(): void {
   // between two versions and paints them inside two frames; nothing below
   // (comments, composer, alignment) applies there.
   if (data.compare) {
-    initCompare({ oldVersionNumber: data.compare.versionNumber, newVersionNumber: data.versionNumber });
+    initCompare({ slug: data.slug, oldVersionNumber: data.compare.versionNumber, newVersionNumber: data.versionNumber });
     return;
   }
 
@@ -1104,7 +1105,9 @@ function init(): void {
   });
 
   // --- bridge -----------------------------------------------------------
+  loadFrame(iframe, data.slug);
   const bridge = new AnnotatorBridge(iframe, {
+    onStorage: (area, contents) => persistFrameStorage(data.slug, area, contents),
     onLayout: (contentWidth) => scaler.report(contentWidth),
     onPositions: (positions) => {
       framePositions.clear();

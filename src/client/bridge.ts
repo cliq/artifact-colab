@@ -14,6 +14,7 @@ import type {
   FrameMessage,
   ParentMessage,
 } from '../annotator/protocol.js';
+import { sanitizeContents, type StorageArea, type StorageContents } from '../shared/frameStorage.js';
 
 export interface BridgeCallbacks {
   onReady?: () => void;
@@ -30,6 +31,8 @@ export interface BridgeCallbacks {
   onAnchorStates?: (states: { id: string; state: AnchorState }[]) => void;
   onLayout?: (contentWidth: number) => void;
   onPositions?: (positions: AnchorPosition[]) => void;
+  /** The frame's `localStorage` or `sessionStorage` changed; `data` is the whole area. */
+  onStorage?: (area: StorageArea, data: StorageContents) => void;
 }
 
 function randomToken(): string {
@@ -110,6 +113,11 @@ export class AnnotatorBridge {
         break;
       case 'positions':
         this.callbacks.onPositions?.(msg.positions);
+        break;
+      case 'storage':
+        if (msg.area === 'local' || msg.area === 'session') {
+          this.callbacks.onStorage?.(msg.area, sanitizeContents(msg.data));
+        }
         break;
     }
   };

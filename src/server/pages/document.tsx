@@ -366,7 +366,7 @@ export const DocumentPage: FC<DocumentPageProps> = ({
                   <iframe
                     id="compare-frame"
                     sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-                    src={`/d/${document.id}/frame?version=${compareVersion.number}`}
+                    data-src={`/d/${document.id}/frame?version=${compareVersion.number}`}
                     title={`${document.title} — v${compareVersion.number}`}
                   ></iframe>
                 </div>
@@ -382,7 +382,7 @@ export const DocumentPage: FC<DocumentPageProps> = ({
                   <iframe
                     id="artifact-frame"
                     sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-                    src={`/d/${document.id}/frame?version=${shownVersion.number}`}
+                    data-src={`/d/${document.id}/frame?version=${shownVersion.number}`}
                     title={`${document.title} — v${shownVersion.number}`}
                   ></iframe>
                 </div>
@@ -393,7 +393,7 @@ export const DocumentPage: FC<DocumentPageProps> = ({
               <iframe
                 id="artifact-frame"
                 sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-                src={`/d/${document.id}/frame?version=${shownVersion.number}`}
+                data-src={`/d/${document.id}/frame?version=${shownVersion.number}`}
                 title={document.title}
               ></iframe>
             </div>

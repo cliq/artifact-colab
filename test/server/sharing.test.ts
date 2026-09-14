@@ -259,9 +259,9 @@ describe('public sharing', () => {
     const html = await (await app.request(`/d/${slug}?version=2&compare=1`, { headers: { cookie: ownerCookie } })).text();
     // Two sandboxed frames: the older version on the left, the shown one on the right.
     expect(html).toContain(`id="compare-frame"`);
-    expect(html).toContain(`src="/d/${slug}/frame?version=1"`);
+    expect(html).toContain(`data-src="/d/${slug}/frame?version=1"`);
     expect(html).toContain(`id="artifact-frame"`);
-    expect(html).toContain(`src="/d/${slug}/frame?version=2"`);
+    expect(html).toContain(`data-src="/d/${slug}/frame?version=2"`);
     expect(html).toContain('comparing v1 → v2 — commenting disabled');
     // The sidebar becomes the change list and the client learns which version is the base.
     expect(html).toContain('<span id="comments-title">Changes</span>');

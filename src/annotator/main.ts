@@ -8,6 +8,7 @@
  */
 
 import { installExternalLinks } from './links.js';
+import { installStorageShim, type StorageShim } from './storage.js';
 
 import { describeAnchor } from '../anchoring/anchor.js';
 import { buildTextIndex, domToTextOffset, textRangeToDomRange, type TextIndex } from '../anchoring/index.js';
@@ -15,6 +16,15 @@ import { locateTextAnchor } from '../anchoring/text.js';
 import type { AnchorPosition, AnnotatorAnchorInput, DiffRangeInput, FrameMessage, ParentMessage } from './protocol.js';
 
 installExternalLinks(document);
+
+// Before any artifact script runs: the frame's opaque origin has no Web
+// Storage, so give it one that the parent persists per document.
+let storageShim: StorageShim | null = null;
+try {
+  storageShim = installStorageShim(window);
+} catch {
+  // Artifacts fall back to whatever the browser gives them.
+}
 
 const MAX_SELECTION_CHARS = 10_000;
 const RELOCATE_DEBOUNCE_MS = 200;
@@ -327,6 +337,8 @@ function start(): void {
       if (token !== null) return; // token is set once per load
       token = msg.token;
       reportText = msg.reportText === true;
+      const initToken = token;
+      storageShim?.attach((area, data) => post({ token: initToken, type: 'storage', area, data }));
       post({ token, type: 'capabilities', highlights: highlightsSupported });
       rebuildIndex();
       startObserver();

@@ -11,14 +11,17 @@
  */
 
 import { diffText, wordsAfter, wordsBefore, type DiffHunk } from '../shared/diff.js';
+import type { StorageArea, StorageContents } from '../shared/frameStorage.js';
 import { AnnotatorBridge } from './bridge.js';
 import { FrameScaler } from './frameScale.js';
+import { loadFrame, persistFrameStorage } from './frameStorage.js';
 import { initSidebarCollapse } from './sidebarCollapse.js';
 
 const CONTEXT_WORDS = 4;
 const CHANGE_PREVIEW_MAX = 240;
 
 export interface CompareData {
+  slug: string;
   oldVersionNumber: number;
   newVersionNumber: number;
 }
@@ -226,6 +229,12 @@ export function initCompare(compare: CompareData): void {
   const onCapabilities = (highlights: boolean): void => {
     if (!highlights) noHighlightsBanner?.removeAttribute('hidden');
   };
+  // Both versions share the document's storage, as they would share an origin.
+  const onStorage = (area: StorageArea, contents: StorageContents): void =>
+    persistFrameStorage(compare.slug, area, contents);
+
+  loadFrame(oldFrame, compare.slug);
+  loadFrame(newFrame, compare.slug);
 
   const oldBridge = new AnnotatorBridge(
     oldFrame,
@@ -237,6 +246,7 @@ export function initCompare(compare: CompareData): void {
       onLayout: (width) => oldScaler.report(width),
       onDiffClick,
       onCapabilities,
+      onStorage,
     },
     { reportText: true },
   );
@@ -250,6 +260,7 @@ export function initCompare(compare: CompareData): void {
       onLayout: (width) => newScaler.report(width),
       onDiffClick,
       onCapabilities,
+      onStorage,
     },
     { reportText: true },
   );

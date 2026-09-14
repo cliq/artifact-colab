@@ -496,6 +496,58 @@ test.describe('happy path', () => {
     await expect(page.locator('.thread-card', { hasText: commentBody })).toBeVisible();
   });
 
+  test('an artifact remembers its settings across reloads despite the opaque-origin frame', async () => {
+    // The tracker writes through localStorage (via a try/catch, like Claude
+    // artifacts do) and reads it back on load; sessionStorage holds a view state.
+    const storageHtml = `<!DOCTYPE html><html><body>
+<p>Theme: <output id="theme">unset</output> · Visits: <output id="visits">0</output></p>
+<button id="dark">Go dark</button>
+<script>
+  function paint() {
+    document.getElementById('theme').textContent = localStorage.getItem('theme') || 'unset';
+    document.getElementById('visits').textContent = sessionStorage.getItem('visits') || '0';
+  }
+  try {
+    sessionStorage.setItem('visits', String(Number(sessionStorage.getItem('visits') || '0') + 1));
+  } catch (e) {}
+  document.getElementById('dark').addEventListener('click', function () {
+    try { localStorage.setItem('theme', 'dark'); } catch (e) {}
+    paint();
+  });
+  paint();
+</script></body></html>`;
+    const result = await callTool(page.request, pat, 'publish_artifact', { title: 'Settings Fixture', html: storageHtml });
+    expect(result.isError).toBeFalsy();
+    const storageSlug = extractDocumentId(result.content[0]!.text);
+
+    await page.goto(`/d/${storageSlug}`);
+    let frame = page.frameLocator('#artifact-frame');
+    await expect(frame.locator('#theme')).toHaveText('unset');
+    await expect(frame.locator('#visits')).toHaveText('1');
+    await frame.locator('#dark').click();
+    await expect(frame.locator('#theme')).toHaveText('dark');
+    // The viewer keeps the frame's storage per document, in its own origin.
+    await expect
+      .poll(() => page.evaluate((key) => localStorage.getItem(key), `artifact-storage:${storageSlug}`))
+      .toBe(JSON.stringify({ theme: 'dark' }));
+
+    await page.reload();
+    frame = page.frameLocator('#artifact-frame');
+    await expect(frame.locator('#theme')).toHaveText('dark');
+    await expect(frame.locator('#visits')).toHaveText('2');
+
+    // Another document starts from a clean slate.
+    await page.goto(`/d/${slug}`);
+    const other = await getArtifactFrame(page);
+    expect(await other.evaluate(() => localStorage.getItem('theme'))).toBeNull();
+    // A fresh tab keeps localStorage but, like the real thing, not sessionStorage.
+    const tab = await context.newPage();
+    await tab.goto(`/d/${storageSlug}`);
+    await expect(tab.frameLocator('#artifact-frame').locator('#theme')).toHaveText('dark');
+    await expect(tab.frameLocator('#artifact-frame').locator('#visits')).toHaveText('1');
+    await tab.close();
+  });
+
   test('a gmail contractor is invited, signs in with the emailed code, sees the document, and comments', async ({
     browser,
   }) => {

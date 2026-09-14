@@ -85,7 +85,9 @@ production — the server refuses to start if `DEV_LOGIN_CODE` is set while `NOD
   (even if they had opted out) and the comment reaches them in the next digest, flagged as a mention. Agents can tag
   people too, by writing `@their@email` in the body of an `add_comment` call. Only people who can open the artifact
   can be tagged: on an "only me" artifact nobody is, so a mention never sends anyone comments they can't read.
-- Artifacts run inside a sandboxed iframe; their scripts can't touch the app or your session.
+- Artifacts run inside a sandboxed iframe; their scripts can't touch the app or your session. The sandbox has no
+  Web Storage of its own, so the viewer stands in: an artifact's `localStorage`/`sessionStorage` is kept per
+  document in your browser and comes back on the next visit, like it would on claude.ai.
 - Large artifacts don't have to squeeze through an MCP tool call: `POST /api/publish` accepts a multipart upload
   (HTML file + image assets) with the same bearer token, so Claude can `curl` big files straight from disk. The
   `publish_artifact` tool description includes the exact command.

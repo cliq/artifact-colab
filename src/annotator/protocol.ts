@@ -9,6 +9,7 @@
  */
 
 import type { TextAnchor } from '../anchoring/text.js';
+import type { StorageArea, StorageContents } from '../shared/frameStorage.js';
 
 export type AnchorState = 'anchored' | 'ambiguous' | 'orphaned';
 
@@ -70,7 +71,13 @@ export type FrameMessage =
    * cards with the content they reference. Anchors whose range has no box
    * (inside a closed <details>, display:none, …) are left out.
    */
-  | { token: string; type: 'positions'; positions: AnchorPosition[] };
+  | { token: string; type: 'positions'; positions: AnchorPosition[] }
+  /**
+   * Full contents of one Web Storage area after the artifact changed it. The
+   * frame's opaque origin has no storage of its own; the parent persists this
+   * under the document and seeds it back through the iframe name on load.
+   */
+  | { token: string; type: 'storage'; area: StorageArea; data: StorageContents };
 
 export interface AnchorPosition {
   id: string;
