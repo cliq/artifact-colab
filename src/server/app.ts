@@ -15,6 +15,7 @@ import { csrfProtect, sessionAuth } from './middleware.js';
 import { adminRoutes } from './routes/admin.js';
 import { apiRoutes } from './routes/api.js';
 import { authRoutes } from './routes/auth.js';
+import { collaborationRoutes } from './routes/collaboration.js';
 import { documentRoutes } from './routes/document.js';
 import { frameRoutes } from './routes/frame.js';
 import { pageRoutes } from './routes/pages.js';
@@ -43,7 +44,7 @@ export function createApp(deps: { db: DB; config: Config }): Hono<AppEnv> {
   const defaultBodyLimit = bodyLimit({ maxSize: DEFAULT_MAX_BODY_BYTES });
   app.use('*', (c, next) => {
     const path = new URL(c.req.url).pathname;
-    return (PUBLISH_BODY_PATHS.has(path) ? publishBodyLimit : defaultBodyLimit)(c, next);
+    return ((PUBLISH_BODY_PATHS.has(path) || /^\/api\/docs\/[^/]+\/versions$/.test(path)) ? publishBodyLimit : defaultBodyLimit)(c, next);
   });
 
   app.use('*', csrfProtect());
@@ -67,6 +68,7 @@ export function createApp(deps: { db: DB; config: Config }): Hono<AppEnv> {
   // REST API for the viewer sidebar
   app.use('/api/*', sessionAuth({ redirect: false }));
   app.route('/', apiRoutes);
+  app.route('/', collaborationRoutes);
 
   // Viewer page + sandboxed artifact frame (HTML routes redirect to sign-in)
   app.use('/d/*', sessionAuth({ redirect: true }));

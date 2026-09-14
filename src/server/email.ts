@@ -65,6 +65,62 @@ export async function sendInviteEmail(config: Config, to: string, inviterEmail: 
   }
 }
 
+async function sendRecordedEmail(
+  config: Config,
+  message: { to: string; subject: string; text: string },
+  description: string,
+): Promise<{ ok: boolean }> {
+  if (config.devEmailFile) {
+    appendFileSync(config.devEmailFile, `${JSON.stringify(message)}\n`);
+    return { ok: true };
+  }
+  try {
+    const resend = new Resend(config.resendApiKey);
+    const { error } = await resend.emails.send({ from: config.emailFrom, ...message });
+    if (error) throw new Error(`${error.name}: ${error.message}`);
+    return { ok: true };
+  } catch (err) {
+    console.error(`Failed to send ${description} to ${message.to} via Resend:`, err);
+    return { ok: false };
+  }
+}
+
+export async function sendDocumentInvitation(
+  config: Config,
+  to: string,
+  inviterEmail: string,
+  documentTitle: string,
+  role: 'viewer' | 'editor',
+  token: string,
+): Promise<{ ok: boolean }> {
+  const subject = `${inviterEmail} invited you to collaborate on ${documentTitle}`;
+  const text = [
+    `${inviterEmail} invited you as a ${role === 'editor' ? 'Editor' : 'Viewer'} of “${documentTitle}” on Artifact Colab.`,
+    '',
+    'Sign in with this exact email address, then accept the invitation:',
+    `${config.baseUrl}/invitations/${token}`,
+    '',
+    'This invitation expires in 7 days.',
+  ].join('\n');
+  return sendRecordedEmail(config, { to, subject, text }, 'document invitation');
+}
+
+export async function sendEditPermissionRequest(
+  config: Config,
+  to: string,
+  requesterEmail: string,
+  documentTitle: string,
+  slug: string,
+): Promise<{ ok: boolean }> {
+  const subject = `${requesterEmail} requested edit access to ${documentTitle}`;
+  const text = [
+    `${requesterEmail} requested Editor access to “${documentTitle}”.`,
+    '',
+    `Review access: ${config.baseUrl}/d/${encodeURIComponent(slug)}?share=1`,
+  ].join('\n');
+  return sendRecordedEmail(config, { to, subject, text }, 'edit permission request');
+}
+
 export async function sendDigest(config: Config, to: string, subject: string, text: string): Promise<void> {
   if (config.devEmailFile) {
     appendFileSync(config.devEmailFile, `${JSON.stringify({ to, subject, text })}\n`);

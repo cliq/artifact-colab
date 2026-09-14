@@ -726,6 +726,12 @@ button.secondary.danger:hover {
   margin-bottom: 2.5rem;
 }
 
+.shared-section-note {
+  margin: -0.35rem 0 0.9rem;
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
 select {
   font-family: inherit;
   font-size: 0.95rem;

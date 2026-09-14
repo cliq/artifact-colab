@@ -25,8 +25,33 @@ interface ViewerData {
   versionNumber: number;
   isCurrentVersion: boolean;
   csrfToken: string;
+  userEmail: string;
   /** Set when the page compares an older version against the shown one. */
   compare: { versionNumber: number } | null;
+  access: {
+    effectiveRole: 'owner' | 'editor' | 'viewer';
+    canComment: boolean;
+    canPublish: boolean;
+    canManageAccess: boolean;
+    canRequestEdit: boolean;
+  };
+}
+
+type CollaborationRole = 'viewer' | 'editor';
+
+interface InvitationDTO {
+  id: string;
+  email: string;
+  role: CollaborationRole;
+  status: string;
+  deliveryStatus?: string | null;
+}
+
+interface CollaboratorDTO {
+  userId: string;
+  email: string;
+  name?: string | null;
+  role: CollaborationRole;
 }
 
 interface AuthorDTO {
@@ -247,6 +272,305 @@ function injectStyles(): void {
   document.head.appendChild(style);
 }
 
+function errorText(payload: unknown, fallback: string): string {
+  if (payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string') return payload.error;
+  return fallback;
+}
+
+/** Owner invitation management, collaborator role controls, viewer edit requests, and editor uploads. */
+function initCollaboration(data: ViewerData): void {
+  const shareMenu = document.querySelector<HTMLDetailsElement>('.share-menu');
+  if (new URLSearchParams(window.location.search).get('share') === '1') shareMenu?.setAttribute('open', '');
+
+  const requestButton = document.getElementById('request-edit-permission') as HTMLButtonElement | null;
+  const requestFeedback = document.getElementById('request-edit-feedback');
+  requestButton?.addEventListener('click', () => {
+    requestButton.disabled = true;
+    if (requestFeedback) requestFeedback.textContent = 'Sending request…';
+    void fetch(`/api/docs/${data.slug}/request-edit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-csrf-token': data.csrfToken },
+      body: '{}',
+    })
+      .then(async (res) => {
+        const payload: unknown = await res.json().catch(() => null);
+        if (!res.ok) {
+          const code = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string' ? payload.error : '';
+          const message = code === 'cooldown'
+            ? 'You already requested edit access today.'
+            : code === 'rate_limited'
+              ? 'Too many requests. Try again later.'
+              : errorText(payload, 'Could not send the request.');
+          throw new Error(message);
+        }
+        requestButton.textContent = 'Request sent';
+        if (requestFeedback) {
+          requestFeedback.dataset['kind'] = 'success';
+          requestFeedback.textContent = 'The owner has been emailed.';
+        }
+      })
+      .catch((error: unknown) => {
+        requestButton.disabled = false;
+        if (requestFeedback) {
+          requestFeedback.dataset['kind'] = 'error';
+          requestFeedback.textContent = error instanceof Error ? error.message : 'Could not send the request.';
+        }
+      });
+  });
+
+  const uploadForm = document.getElementById('version-upload-form') as HTMLFormElement | null;
+  const uploadFeedback = document.getElementById('upload-feedback');
+  uploadForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const submit = uploadForm.querySelector<HTMLButtonElement>('button[type="submit"]');
+    if (submit) submit.disabled = true;
+    if (uploadFeedback) uploadFeedback.textContent = 'Uploading…';
+    const formData = new FormData(uploadForm);
+    const content = formData.get('content');
+    const assets = formData.getAll('assets');
+    formData.delete('content');
+    formData.delete('assets');
+    if (content instanceof File) {
+      const markdown = /(?:\.md|\.markdown)$/i.test(content.name) || content.type === 'text/markdown';
+      formData.append(markdown ? 'markdown' : 'html', content, content.name);
+    }
+    for (const asset of assets) {
+      if (asset instanceof File && asset.name) formData.append('assets', asset, asset.name);
+    }
+    void fetch(uploadForm.action, {
+      method: 'POST',
+      headers: { 'x-csrf-token': data.csrfToken },
+      body: formData,
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const payload: unknown = await res.json().catch(() => null);
+          throw new Error(errorText(payload, 'Could not upload this version.'));
+        }
+        window.location.assign(`/d/${data.slug}`);
+      })
+      .catch((error: unknown) => {
+        if (submit) submit.disabled = false;
+        if (uploadFeedback) {
+          uploadFeedback.dataset['kind'] = 'error';
+          uploadFeedback.textContent = error instanceof Error ? error.message : 'Could not upload this version.';
+        }
+      });
+  });
+
+  if (!data.access.canManageAccess) return;
+  const emailInput = document.getElementById('invite-email-entry') as HTMLInputElement | null;
+  const addButton = document.getElementById('add-invite-email') as HTMLButtonElement | null;
+  const chipsEl = document.getElementById('invite-chips');
+  const sendButton = document.getElementById('send-invitations') as HTMLButtonElement | null;
+  const feedback = document.getElementById('invite-feedback');
+  const list = document.getElementById('access-list');
+  if (!emailInput || !addButton || !chipsEl || !sendButton || !feedback || !list) return;
+  // Stable aliases retain the guard's narrowing inside event callbacks.
+  const emailEntry = emailInput;
+  const chips = chipsEl;
+  const send = sendButton;
+  const status = feedback;
+  const accessList = list;
+
+  const pending = new Map<string, CollaborationRole>();
+  const normalizeEmail = (value: string): string => value.trim().replace(/^@/, '').toLowerCase();
+  const currentUserEmail = normalizeEmail(data.userEmail);
+  const validEmail = (value: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+
+  function setFeedback(text: string, kind?: 'error' | 'success'): void {
+    status.textContent = text;
+    if (kind) status.dataset['kind'] = kind;
+    else delete status.dataset['kind'];
+  }
+
+  function renderChips(): void {
+    chips.textContent = '';
+    for (const [email, role] of pending) {
+      const select = el('select', { attrs: { 'aria-label': `Role for ${email}` } });
+      select.append(el('option', { text: 'Viewer', attrs: { value: 'viewer' } }), el('option', { text: 'Editor', attrs: { value: 'editor' } }));
+      select.value = role;
+      select.addEventListener('change', () => pending.set(email, select.value as CollaborationRole));
+      const remove = el('button', { className: 'chip-remove', text: '×', attrs: { type: 'button', 'aria-label': `Remove ${email}` } });
+      remove.addEventListener('click', () => {
+        pending.delete(email);
+        renderChips();
+      });
+      chips.appendChild(el('div', { className: 'invite-chip' }, [el('span', { className: 'invite-chip-email', text: email }), select, remove]));
+    }
+    send.hidden = pending.size === 0;
+  }
+
+  function addEmails(): void {
+    const values = emailEntry.value.split(/[\s,;]+/).filter(Boolean);
+    const invalid: string[] = [];
+    for (const raw of values) {
+      const email = normalizeEmail(raw);
+      if (!validEmail(email)) invalid.push(raw);
+      else if (email === currentUserEmail) invalid.push(`${raw} (that's you)`);
+      else if (!pending.has(email)) pending.set(email, 'viewer');
+    }
+    emailEntry.value = '';
+    renderChips();
+    setFeedback(invalid.length > 0 ? `Check ${invalid.join(', ')}.` : '', invalid.length > 0 ? 'error' : undefined);
+  }
+
+  addButton.addEventListener('click', addEmails);
+  emailEntry.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ',' && event.key !== ';') return;
+    event.preventDefault();
+    addEmails();
+  });
+
+  async function mutation(
+    method: 'POST' | 'PATCH' | 'DELETE',
+    path: string,
+    body?: unknown,
+    messages?: Record<string, string>,
+  ): Promise<unknown> {
+    const res = await fetch(path, {
+      method,
+      headers: { 'content-type': 'application/json', 'x-csrf-token': data.csrfToken },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const payload: unknown = await res.json().catch(() => null);
+    if (!res.ok) {
+      const code = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string' ? payload.error : '';
+      throw new Error(messages?.[code] ?? errorText(payload, 'Could not update access.'));
+    }
+    return payload;
+  }
+
+  function roleSelect(role: CollaborationRole, label: string, change: (role: CollaborationRole) => Promise<void>): HTMLSelectElement {
+    const select = el('select', { attrs: { 'aria-label': label } });
+    select.append(el('option', { text: 'Viewer', attrs: { value: 'viewer' } }), el('option', { text: 'Editor', attrs: { value: 'editor' } }));
+    select.value = role;
+    select.addEventListener('change', () => {
+      select.disabled = true;
+      void change(select.value as CollaborationRole).catch((error: unknown) => {
+        select.value = role;
+        setFeedback(error instanceof Error ? error.message : 'Could not update access.', 'error');
+      }).finally(() => { select.disabled = false; });
+    });
+    return select;
+  }
+
+  function actionButton(label: string, action: () => Promise<void>, danger = false): HTMLButtonElement {
+    const button = el('button', { className: danger ? 'secondary danger' : 'secondary', text: label, attrs: { type: 'button' } });
+    button.addEventListener('click', () => {
+      button.disabled = true;
+      void action().catch((error: unknown) => {
+        button.disabled = false;
+        setFeedback(error instanceof Error ? error.message : 'Could not update access.', 'error');
+      });
+    });
+    return button;
+  }
+
+  function accessRow(email: string, meta: string, controls: Node[], failed = false): HTMLElement {
+    return el('div', { className: 'access-row' }, [
+      el('div', { className: 'access-person' }, [
+        el('span', { className: 'access-email', text: email }),
+        el('span', { className: `access-meta${failed ? ' delivery-failed' : ''}`, text: meta }),
+      ]),
+      el('div', { className: 'access-actions' }, controls),
+    ]);
+  }
+
+  async function loadAccess(): Promise<void> {
+    const res = await fetch(`/api/docs/${data.slug}/collaborators`);
+    const payload = await res.json().catch(() => ({})) as { invitations?: InvitationDTO[]; collaborators?: CollaboratorDTO[]; error?: string };
+    if (!res.ok) throw new Error(payload.error ?? 'Could not load access.');
+    accessList.textContent = '';
+    const collaborators = payload.collaborators ?? [];
+    const activeEmails = new Set(collaborators.map((collaborator) => collaborator.email.toLowerCase()));
+    for (const collaborator of collaborators) {
+      const select = roleSelect(collaborator.role, `Role for ${collaborator.email}`, async (role) => {
+        await mutation('PATCH', `/api/docs/${data.slug}/collaborators/${encodeURIComponent(collaborator.userId)}`, { role });
+        setFeedback(`${collaborator.email} is now ${role === 'editor' ? 'an Editor' : 'a Viewer'}.`, 'success');
+        await loadAccess();
+      });
+      const revoke = actionButton('Revoke', async () => {
+        await mutation('DELETE', `/api/docs/${data.slug}/collaborators/${encodeURIComponent(collaborator.userId)}`);
+        setFeedback(`Access revoked for ${collaborator.email}.`, 'success');
+        await loadAccess();
+      }, true);
+      accessList.appendChild(accessRow(collaborator.email, `Accepted · ${collaborator.role}`, [select, revoke]));
+    }
+    for (const invitation of payload.invitations ?? []) {
+      if (invitation.status === 'accepted' && activeEmails.has(invitation.email.toLowerCase())) continue;
+      if (invitation.status === 'revoked') continue;
+      const controls: Node[] = [];
+      if (invitation.status === 'pending') {
+        controls.push(roleSelect(invitation.role, `Role for ${invitation.email}`, async (role) => {
+          await mutation('PATCH', `/api/docs/${data.slug}/invitations/${encodeURIComponent(invitation.id)}`, { role });
+          setFeedback(`Invitation updated for ${invitation.email}.`, 'success');
+          await loadAccess();
+        }));
+      }
+      if (invitation.status === 'pending' || invitation.status === 'expired') {
+        controls.push(actionButton('Resend', async () => {
+          const payload = await mutation(
+            'POST',
+            `/api/docs/${data.slug}/invitations/${encodeURIComponent(invitation.id)}/resend`,
+            undefined,
+            {
+              cooldown: 'Please wait a minute before resending this invitation.',
+              rate_limited: 'Too many resend attempts. Try again later.',
+            },
+          ) as { invitation?: InvitationDTO };
+          await loadAccess();
+          if (payload.invitation?.deliveryStatus === 'failed') {
+            setFeedback(`Invitation saved for ${invitation.email}, but email delivery failed. You can try Resend again.`, 'error');
+          } else {
+            setFeedback(`Invitation resent to ${invitation.email}.`, 'success');
+          }
+        }));
+        controls.push(actionButton('Cancel', async () => {
+          await mutation('DELETE', `/api/docs/${data.slug}/invitations/${encodeURIComponent(invitation.id)}`);
+          setFeedback(`Invitation cancelled for ${invitation.email}.`, 'success');
+          await loadAccess();
+        }, true));
+      }
+      const delivery = invitation.deliveryStatus ? ` · ${invitation.deliveryStatus.replaceAll('_', ' ')}` : '';
+      accessList.appendChild(accessRow(invitation.email, `${invitation.status} · ${invitation.role}${delivery}`, controls, invitation.deliveryStatus === 'failed'));
+    }
+    if (accessList.childElementCount === 0) {
+      accessList.appendChild(el('p', { className: 'share-empty', text: accessList.dataset['emptyMessage'] ?? 'No direct collaborators.' }));
+    }
+  }
+
+  send.addEventListener('click', () => {
+    send.disabled = true;
+    setFeedback('Sending invitations…');
+    void fetch(`/api/docs/${data.slug}/invitations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-csrf-token': data.csrfToken },
+      body: JSON.stringify({ invitations: [...pending].map(([email, role]) => ({ email, role })) }),
+    }).then(async (res) => {
+      const payload = await res.json().catch(() => ({})) as { results?: { email: string; ok: boolean; deliveryStatus?: string | null; error?: string }[]; error?: string };
+      if (!res.ok) throw new Error(payload.error ?? 'Could not send invitations.');
+      const results = payload.results ?? [];
+      const rejected = results.filter((result) => !result.ok);
+      const deliveryFailed = results.filter((result) => result.ok && result.deliveryStatus === 'failed');
+      for (const result of results) if (result.ok) pending.delete(result.email.toLowerCase());
+      renderChips();
+      const problems = [
+        ...rejected.map((result) => `${result.email}: ${result.error ?? 'could not create invitation'}`),
+        ...deliveryFailed.map((result) => `${result.email}: invitation saved, but email delivery failed; use Resend`),
+      ];
+      setFeedback(problems.length > 0 ? `Some invitations need attention: ${problems.join('; ')}` : 'Invitations sent.', problems.length > 0 ? 'error' : 'success');
+      await loadAccess();
+    }).catch((error: unknown) => {
+      setFeedback(error instanceof Error ? error.message : 'Could not send invitations.', 'error');
+    }).finally(() => { send.disabled = false; });
+  });
+
+  void loadAccess().catch((error: unknown) => {
+    accessList.textContent = error instanceof Error ? error.message : 'Could not load access.';
+  });
+}
+
 function init(): void {
   const dataEl = document.getElementById('viewer-data');
   const iframe = document.getElementById('artifact-frame') as HTMLIFrameElement | null;
@@ -261,6 +585,7 @@ function init(): void {
   const data: ViewerData = JSON.parse(dataEl.textContent);
 
   injectStyles();
+  initCollaboration(data);
 
   const copyLinkButton = document.getElementById('copy-share-link') as HTMLButtonElement | null;
   copyLinkButton?.addEventListener('click', () => {
@@ -301,6 +626,17 @@ function init(): void {
           if (note && clicked.dataset['note']) note.textContent = clicked.dataset['note'];
           const summary = document.querySelector('.share-menu summary');
           if (summary && clicked.dataset['summary']) summary.textContent = clicked.dataset['summary'];
+          const accessList = document.getElementById('access-list');
+          if (accessList) {
+            const emptyMessage = clicked.dataset['visibility'] === 'private'
+              ? 'Only you have access.'
+              : clicked.dataset['visibility'] === 'team'
+                ? 'No one has been invited directly. Team members still have access.'
+                : 'No one has been invited directly. Anyone signed in with the link still has access.';
+            accessList.dataset['emptyMessage'] = emptyMessage;
+            const empty = accessList.querySelector('.share-empty');
+            if (empty && accessList.childElementCount === 1) empty.textContent = emptyMessage;
+          }
         })
         .catch(() => form.submit());
     });
@@ -328,7 +664,7 @@ function init(): void {
   // empty for guests on a public document, who then simply get no picker.
   let mentionable: Mentionable[] = [];
   const mentionPicker = new MentionPicker(() => mentionable);
-  void fetch(`/api/docs/${data.slug}/mentionable`)
+  if (data.access.canComment) void fetch(`/api/docs/${data.slug}/mentionable`)
     .then((res) => (res.ok ? res.json() : { users: [] }))
     .then((payload: { users: Mentionable[] }) => {
       mentionable = payload.users;
@@ -372,7 +708,7 @@ function init(): void {
   const threadsEl = el('div', { attrs: { id: 'ac-threads' } });
 
   sidebar.textContent = '';
-  sidebar.appendChild(composer);
+  if (data.access.canComment) sidebar.appendChild(composer);
   sidebar.appendChild(threadsEl);
 
   function showComposer(quotedText: string): void {
@@ -430,6 +766,15 @@ function init(): void {
       if (res.ok) await fetchComments();
     }
     for (const reaction of reactions) {
+      if (!data.access.canComment) {
+        bar.appendChild(
+          el('span', { className: `reaction-chip${reaction.reactedByMe ? ' mine' : ''}`, attrs: { title: reaction.users.join(', ') } }, [
+            reaction.emoji,
+            el('span', { className: 'reaction-count', text: String(reaction.count) }),
+          ]),
+        );
+        continue;
+      }
       const chip = el(
         'button',
         {
@@ -444,6 +789,7 @@ function init(): void {
       );
       bar.appendChild(chip);
     }
+    if (!data.access.canComment) return bar;
     const palette = el('div', { className: 'reaction-palette' });
     for (const emoji of REACTION_EMOJIS) {
       const mine = reactions.some((r) => r.emoji === emoji && r.reactedByMe);
@@ -722,7 +1068,17 @@ function init(): void {
           focusThread(thread.id);
         },
       },
-      [badges, quote, meta, ...(resolvedMeta ? [resolvedMeta] : []), body, reactions, collapsedInfo, repliesEl, replyForm, actions],
+      [
+        badges,
+        quote,
+        meta,
+        ...(resolvedMeta ? [resolvedMeta] : []),
+        body,
+        reactions,
+        collapsedInfo,
+        repliesEl,
+        ...(data.access.canComment ? [replyForm, actions] : []),
+      ],
     );
     return card;
   }
@@ -1119,7 +1475,7 @@ function init(): void {
       if (!highlights) noHighlightsBanner?.removeAttribute('hidden');
     },
     onSelection: (anchor, quotedText, _rect) => {
-      if (!data.isCurrentVersion) return;
+      if (!data.isCurrentVersion || !data.access.canComment) return;
       if (anchor) {
         pendingAnchor = anchor;
         pendingQuotedText = quotedText;

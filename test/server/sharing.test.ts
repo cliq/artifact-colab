@@ -147,8 +147,9 @@ describe('public sharing', () => {
     const page = await app.request(`/d/${slug}`, { headers: { cookie: outsiderCookie } });
     expect(page.status).toBe(200);
     const html = await page.text();
-    expect(html).toContain('Shared with you');
-    expect(html).not.toContain('Who can open this artifact'); // the Share menu is members-only
+    expect(html).toContain('Your access:');
+    expect(html).toContain('Share this artifact');
+    expect(html).not.toContain('Send invitations'); // invitation management remains owner-only
 
     expect((await app.request(`/d/${slug}/frame`, { headers: { cookie: outsiderCookie } })).status).toBe(200);
 

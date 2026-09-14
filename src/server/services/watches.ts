@@ -6,11 +6,12 @@
  * `DIGEST_QUIET_MS` — so a burst of comments lands as one email, not many.
  */
 
-import { and, eq, gt, inArray } from 'drizzle-orm';
+import { and, eq, gt } from 'drizzle-orm';
 
+import { mentionableUsers, resolveDocumentAccess } from './access.js';
 import { extractMentionEmails } from '../../shared/mentions.js';
-import type { DB } from '../db/index.js';
-import { comments, documents, teamMembers, users, watches, type Comment, type Document, type User } from '../db/schema.js';
+import type { DBOrTx } from '../db/index.js';
+import { comments, documents, users, watches, type Comment, type Document, type User } from '../db/schema.js';
 
 export const DIGEST_QUIET_MS = 5 * 60 * 1000;
 
@@ -18,7 +19,7 @@ export const DIGEST_QUIET_MS = 5 * 60 * 1000;
  * Subscribe as a side effect of creating or commenting. Never overwrites an
  * existing row: a sticky 'unwatched' must survive later comments.
  */
-export function autoWatch(db: DB, documentId: string, userId: string, now: Date): void {
+export function autoWatch(db: DBOrTx, documentId: string, userId: string, now: Date): void {
   db.insert(watches)
     .values({ documentId, userId, state: 'watching', lastNotifiedAt: now, createdAt: now, updatedAt: now })
     .onConflictDoNothing()
@@ -33,7 +34,7 @@ export function autoWatch(db: DB, documentId: string, userId: string, now: Date)
  * accumulated while they weren't watching. An existing 'watching' row keeps
  * its cursor — it already covers the comment.
  */
-export function watchForMention(db: DB, documentId: string, userId: string, commentCreatedAt: Date): void {
+export function watchForMention(db: DBOrTx, documentId: string, userId: string, commentCreatedAt: Date): void {
   const justBefore = new Date(commentCreatedAt.getTime() - 1);
   const existing = db
     .select({ state: watches.state })
@@ -50,27 +51,11 @@ export function watchForMention(db: DB, documentId: string, userId: string, comm
     .run();
 }
 
-/**
- * The team members a comment body mentions (`@email`), looked up by email.
- * Only people who can open the document resolve: outsiders never do, and on a
- * private document nobody but its creator does. A watch created from a mention
- * feeds the digest sweep, which mails every 'watching' row without re-checking
- * access — so resolving someone who can't see the document would leak its
- * comments to them by email. An `@` in front of anyone else's address is just
- * text.
- */
-export function resolveMentions(db: DB, document: Pick<Document, 'teamId' | 'visibility' | 'createdBy'>, body: string): User[] {
+/** Mentions resolve only within the artifact's authorized local collaborator directory. */
+export function resolveMentions(db: DBOrTx, document: Pick<Document, 'id' | 'teamId' | 'visibility' | 'createdBy'>, body: string): User[] {
   const emails = extractMentionEmails(body);
   if (emails.length === 0) return [];
-  const conditions = [inArray(users.email, emails)];
-  if (document.visibility === 'private') conditions.push(eq(users.id, document.createdBy));
-  return db
-    .select({ user: users })
-    .from(users)
-    .innerJoin(teamMembers, and(eq(teamMembers.userId, users.id), eq(teamMembers.teamId, document.teamId)))
-    .where(and(...conditions))
-    .all()
-    .map((row) => row.user);
+  return mentionableUsers(db, document.id).filter((user) => emails.includes(user.email));
 }
 
 /**
@@ -78,7 +63,7 @@ export function resolveMentions(db: DB, document: Pick<Document, 'teamId' | 'vis
  * 'unwatched'. Resets the digest cursor: watching starts from now, never
  * from a backlog accumulated while unwatched.
  */
-export function setWatching(db: DB, documentId: string, userId: string, watching: boolean, now: Date): void {
+export function setWatching(db: DBOrTx, documentId: string, userId: string, watching: boolean, now: Date): void {
   const state = watching ? 'watching' : 'unwatched';
   db.insert(watches)
     .values({ documentId, userId, state, lastNotifiedAt: now, createdAt: now, updatedAt: now })
@@ -89,7 +74,7 @@ export function setWatching(db: DB, documentId: string, userId: string, watching
     .run();
 }
 
-export function isWatching(db: DB, documentId: string, userId: string): boolean {
+export function isWatching(db: DBOrTx, documentId: string, userId: string): boolean {
   const row = db
     .select({ state: watches.state })
     .from(watches)
@@ -143,7 +128,7 @@ function digestText(
  * to the newest processed comment — never to `now` — so a comment landing
  * mid-sweep is picked up next time. Returns the emails it sent.
  */
-export async function runDigestSweep(db: DB, baseUrl: string, send: DigestSender, now: Date = new Date()): Promise<DigestEmail[]> {
+export async function runDigestSweep(db: DBOrTx, baseUrl: string, send: DigestSender, now: Date = new Date()): Promise<DigestEmail[]> {
   const watchers = db.select().from(watches).where(eq(watches.state, 'watching')).all();
   const sent: DigestEmail[] = [];
   if (watchers.length === 0) return sent;
@@ -186,6 +171,8 @@ export async function runDigestSweep(db: DB, baseUrl: string, send: DigestSender
     if (!doc) continue;
 
     for (const watch of docWatchers) {
+      // A previous send awaits network I/O: both access and preference may have changed.
+      if (!resolveDocumentAccess(db, documentId, watch.userId) || !isWatching(db, documentId, watch.userId)) continue;
       const unseen = fresh.filter((item) => item.createdAt > watch.lastNotifiedAt);
       if (unseen.length === 0) continue;
 
@@ -207,6 +194,7 @@ export async function runDigestSweep(db: DB, baseUrl: string, send: DigestSender
             text: digestText(baseUrl, doc.title, doc.id, toEmail, authorEmails, to),
           };
           try {
+            if (!resolveDocumentAccess(db, documentId, watch.userId) || !isWatching(db, documentId, watch.userId)) continue;
             await send(email);
             sent.push(email);
           } catch (err) {

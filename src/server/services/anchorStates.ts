@@ -11,7 +11,7 @@ import { parseHTML } from 'linkedom';
 
 import { buildTextIndex } from '../../anchoring/index.js';
 import { locateTextAnchor, type TextAnchor } from '../../anchoring/text.js';
-import type { DB } from '../db/index.js';
+import type { DBOrTx } from '../db/index.js';
 import { comments, commentAnchorStates, documents, versions } from '../db/schema.js';
 
 export type AnchorStateValue = 'anchored' | 'ambiguous' | 'orphaned';
@@ -49,7 +49,7 @@ function parseAnchor(raw: string): TextAnchor | null {
   }
 }
 
-function upsertAnchorState(db: DB, commentId: string, versionId: string, computed: ComputedAnchorState): void {
+function upsertAnchorState(db: DBOrTx, commentId: string, versionId: string, computed: ComputedAnchorState): void {
   db.delete(commentAnchorStates)
     .where(and(eq(commentAnchorStates.commentId, commentId), eq(commentAnchorStates.versionId, versionId)))
     .run();
@@ -64,7 +64,7 @@ function upsertAnchorState(db: DB, commentId: string, versionId: string, compute
  * version, so the version's text is built exactly once and reused for every
  * comment.
  */
-export function recomputeForVersion(db: DB, documentId: string, versionId: string): { orphaned: number; total: number } {
+export function recomputeForVersion(db: DBOrTx, documentId: string, versionId: string): { orphaned: number; total: number } {
   const version = db.select().from(versions).where(eq(versions.id, versionId)).get();
   if (!version) {
     throw new Error(`version not found: ${versionId}`);
@@ -94,7 +94,7 @@ export function recomputeForVersion(db: DB, documentId: string, versionId: strin
  * document's current version) and callers that also need the state against
  * the version the comment was created on.
  */
-export function computeForCommentVersion(db: DB, commentId: string, versionId: string): void {
+export function computeForCommentVersion(db: DBOrTx, commentId: string, versionId: string): void {
   const comment = db.select().from(comments).where(eq(comments.id, commentId)).get();
   if (!comment) {
     throw new Error(`comment not found: ${commentId}`);
@@ -115,7 +115,7 @@ export function computeForCommentVersion(db: DB, commentId: string, versionId: s
  * document's current version. Called right after a comment is created, so
  * its (comment, currentVersion) state is ready before the next GET.
  */
-export function computeForComment(db: DB, commentId: string): void {
+export function computeForComment(db: DBOrTx, commentId: string): void {
   const comment = db.select().from(comments).where(eq(comments.id, commentId)).get();
   if (!comment) {
     throw new Error(`comment not found: ${commentId}`);

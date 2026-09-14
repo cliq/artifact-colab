@@ -1,11 +1,10 @@
 /**
  * Documents/comments REST API. Every document lookup is scoped in the query
- * itself — team membership, widened to any signed-in user for documents with
- * visibility 'public'. A document the requester can't see is indistinguishable
+ * itself — explicit grants, team membership, and signed-in Public access. A document the requester can't see is indistinguishable
  * from a document that doesn't exist, so it 404s rather than 403s.
  */
 
-import { and, asc, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -14,6 +13,7 @@ import type { AppEnv } from '../context.js';
 import type { DB } from '../db/index.js';
 import { comments, commentAnchorStates, commentReactions, documents, teamMembers, users, versions, type Comment, type Document, type Version } from '../db/schema.js';
 import { isReactionEmoji, REACTION_EMOJIS } from '../../shared/reactions.js';
+import { resolveDocumentAccess, mentionableUsers, type DocumentAccess } from '../services/access.js';
 import { assetsForDocument, relinkAssets, stripBaseHref } from '../services/assets.js';
 import { createReply, createThreadComment } from '../services/comments.js';
 import { gravatarUrl } from '../services/gravatar.js';
@@ -46,74 +46,19 @@ async function readJson(c: Context<AppEnv>): Promise<unknown> {
   }
 }
 
-/**
- * The document, if the user is a member of its team; membership is part of the
- * query so outsiders see a 404. Private documents match only for their creator
- * — a teammate can't act on (or even confirm the existence of) someone else's
- * private document.
- */
+/** Compatibility lookups delegate to the shared capability policy. */
 export function findDocumentForUser(db: DB, slug: string, userId: string): Document | undefined {
-  const row = db
-    .select({ document: documents })
-    .from(documents)
-    .innerJoin(teamMembers, and(eq(teamMembers.teamId, documents.teamId), eq(teamMembers.userId, userId)))
-    .where(and(eq(documents.id, slug), or(ne(documents.visibility, 'private'), eq(documents.createdBy, userId))))
-    .get();
-  return row?.document;
+  const access = resolveDocumentAccess(db, slug, userId);
+  return access?.isMember ? access.document : undefined;
 }
 
-export interface ViewerDocument {
-  document: Document;
-  /** False for a signed-in user reaching a public document from outside its team. */
-  isMember: boolean;
-}
+export type ViewerDocument = DocumentAccess;
+export const findDocumentForViewer = resolveDocumentAccess;
 
-/**
- * Read/interact access: team members always, any signed-in user when the
- * document is public, only the creator — while still a member — when it is
- * private. A creator removed from the team loses private access like any other
- * revoked member (same convention as public docs: an ex-member creator is a
- * guest, not an owner). Non-matches stay indistinguishable from nonexistent
- * documents (404), including public documents flipped back to team-only and
- * private documents' teammates. Member-gated actions (delete, share toggle)
- * use `findDocumentForUser`.
- */
-export function findDocumentForViewer(db: DB, slug: string, userId: string): ViewerDocument | undefined {
-  const row = db
-    .select({ document: documents, memberId: teamMembers.userId })
-    .from(documents)
-    .leftJoin(teamMembers, and(eq(teamMembers.teamId, documents.teamId), eq(teamMembers.userId, userId)))
-    .where(
-      and(
-        eq(documents.id, slug),
-        or(
-          and(eq(documents.visibility, 'private'), eq(documents.createdBy, userId), isNotNull(teamMembers.userId)),
-          and(ne(documents.visibility, 'private'), or(isNotNull(teamMembers.userId), eq(documents.visibility, 'public'))),
-        ),
-      ),
-    )
-    .get();
-  return row ? { document: row.document, isMember: row.memberId !== null } : undefined;
-}
-
-/**
- * The document, if it belongs to the given team — the scope check for
- * bearer-token (team-scoped) access. `userId` is the token's user: private
- * documents match only for their creator, so a teammate's token can't read or
- * republish them.
- */
+/** Bearer credentials retain their owning team boundary, even with external grants. */
 export function findDocumentInTeam(db: DB, slug: string, teamId: string, userId: string): Document | undefined {
-  return db
-    .select()
-    .from(documents)
-    .where(
-      and(
-        eq(documents.id, slug),
-        eq(documents.teamId, teamId),
-        or(ne(documents.visibility, 'private'), eq(documents.createdBy, userId)),
-      ),
-    )
-    .get();
+  const access = resolveDocumentAccess(db, slug, userId);
+  return access?.isMember && access.document.teamId === teamId ? access.document : undefined;
 }
 
 /** A document's version by number, or its current version when no number is given. */
@@ -359,6 +304,7 @@ apiRoutes.get('/api/docs/:slug', (c) => {
       createdAt: doc.createdAt,
       currentVersionId: doc.currentVersionId,
     },
+    access: resolveDocumentAccess(db, doc.id, user.id),
     versions: versionRows.map((version) => ({ id: version.id, number: version.number, publishedAt: version.publishedAt })),
   });
 });
@@ -385,17 +331,10 @@ apiRoutes.get('/api/docs/:slug/mentionable', (c) => {
   const user = c.get('user');
   const access = findDocumentForViewer(db, c.req.param('slug'), user.id);
   if (!access) return c.json({ error: 'not found' }, 404);
-  // Only people who can open the document are mentionable: outsiders see
-  // nobody, and on a private document neither do teammates' addresses appear.
-  if (!access.isMember || access.document.visibility === 'private') return c.json({ users: [] });
-
-  const rows = db
-    .select({ email: users.email, name: users.name })
-    .from(teamMembers)
-    .innerJoin(users, eq(users.id, teamMembers.userId))
-    .where(and(eq(teamMembers.teamId, access.document.teamId), ne(teamMembers.userId, user.id)))
-    .orderBy(asc(users.email))
-    .all();
+  // Public guests cannot enumerate the team; private collaborators see only authorized people.
+  if (!access.isMember && access.document.visibility !== 'private' && !access.canPublish) return c.json({ users: [] });
+  const rows = mentionableUsers(db, access.document.id)
+    .filter((person) => person.id !== user.id).sort((a, b) => a.email.localeCompare(b.email));
   return c.json({
     users: rows.map((row) => ({ email: row.email, name: row.name, avatarUrl: gravatarUrl(row.email) })),
   });
@@ -412,6 +351,7 @@ apiRoutes.post('/api/docs/:slug/comments', async (c) => {
 
   const doc = findDocumentForViewer(db, c.req.param('slug'), user.id)?.document;
   if (!doc) return c.json({ error: 'not found' }, 404);
+  if (!resolveDocumentAccess(db, doc.id, user.id)?.canComment) return c.json({ error: 'editor permission required' }, 403);
   if (!parsed.success) return c.json({ error: 'invalid comment' }, 400);
 
   const version = db
@@ -451,6 +391,7 @@ apiRoutes.post('/api/comments/:id/replies', async (c) => {
 
   const doc = findDocumentForViewer(db, parent.documentId, user.id)?.document;
   if (!doc) return c.json({ error: 'not found' }, 404);
+  if (!resolveDocumentAccess(db, doc.id, user.id)?.canComment) return c.json({ error: 'editor permission required' }, 403);
 
   if (!parsed.success) return c.json({ error: 'invalid reply' }, 400);
 
@@ -468,11 +409,13 @@ apiRoutes.post('/api/comments/:id/replies', async (c) => {
   );
 });
 
-apiRoutes.post('/api/comments/:id/resolve', (c) => {
+apiRoutes.post('/api/comments/:id/resolve', async (c) => {
+  await c.req.text();
   const db = c.get('db');
   const user = c.get('user');
   const found = findOwnedTopLevelComment(db, c.req.param('id'), { userId: user.id });
   if (!found) return c.json({ error: 'not found' }, 404);
+  if (!resolveDocumentAccess(db, found.document.id, user.id)?.canComment) return c.json({ error: 'editor permission required' }, 403);
 
   const now = new Date();
   db.update(comments)
@@ -486,11 +429,13 @@ apiRoutes.post('/api/comments/:id/resolve', (c) => {
   return c.json(buildThread(db, updated, found.document.currentVersionId ?? undefined, found.document, user.id));
 });
 
-apiRoutes.post('/api/comments/:id/reopen', (c) => {
+apiRoutes.post('/api/comments/:id/reopen', async (c) => {
+  await c.req.text();
   const db = c.get('db');
   const user = c.get('user');
   const found = findOwnedTopLevelComment(db, c.req.param('id'), { userId: user.id });
   if (!found) return c.json({ error: 'not found' }, 404);
+  if (!resolveDocumentAccess(db, found.document.id, user.id)?.canComment) return c.json({ error: 'editor permission required' }, 403);
 
   db.update(comments).set({ status: 'open', resolvedAt: null, resolvedBy: null }).where(eq(comments.id, found.comment.id)).run();
 
@@ -510,18 +455,20 @@ function reactionTarget(
   commentId: string,
   emoji: string,
   userId: string,
-): { comment: Comment; topLevel: Comment; document: Document } | { error: string; status: 400 | 404 } {
+): { comment: Comment; topLevel: Comment; document: Document } | { error: string; status: 400 | 403 | 404 } {
   if (!isReactionEmoji(emoji)) return { error: `unsupported reaction; use one of ${REACTION_EMOJIS.join(' ')}`, status: 400 };
   const comment = db.select().from(comments).where(eq(comments.id, commentId)).get();
   if (!comment) return { error: 'not found', status: 404 };
   const document = findDocumentForViewer(db, comment.documentId, userId)?.document;
   if (!document) return { error: 'not found', status: 404 };
+  if (!resolveDocumentAccess(db, document.id, userId)?.canComment) return { error: 'editor permission required', status: 403 };
   const topLevel = comment.parentId ? db.select().from(comments).where(eq(comments.id, comment.parentId)).get() : comment;
   if (!topLevel) return { error: 'not found', status: 404 };
   return { comment, topLevel, document };
 }
 
-apiRoutes.put('/api/comments/:id/reactions/:emoji', (c) => {
+apiRoutes.put('/api/comments/:id/reactions/:emoji', async (c) => {
+  await c.req.text();
   const db = c.get('db');
   const user = c.get('user');
   const target = reactionTarget(db, c.req.param('id'), c.req.param('emoji'), user.id);
@@ -534,7 +481,8 @@ apiRoutes.put('/api/comments/:id/reactions/:emoji', (c) => {
   return c.json(buildThread(db, target.topLevel, target.document.currentVersionId ?? undefined, target.document, user.id));
 });
 
-apiRoutes.delete('/api/comments/:id/reactions/:emoji', (c) => {
+apiRoutes.delete('/api/comments/:id/reactions/:emoji', async (c) => {
+  await c.req.text();
   const db = c.get('db');
   const user = c.get('user');
   const target = reactionTarget(db, c.req.param('id'), c.req.param('emoji'), user.id);

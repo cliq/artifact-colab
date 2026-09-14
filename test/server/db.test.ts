@@ -36,6 +36,8 @@ describe('db', () => {
         'comment_anchor_states',
         'comment_reactions',
         'comments',
+        'document_collaborators',
+        'document_invitations',
         'documents',
         'login_codes',
         'sessions',

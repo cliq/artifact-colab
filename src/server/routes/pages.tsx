@@ -8,15 +8,16 @@
  * `.js`-suffixed relative imports regardless of source extension.
  */
 
-import { count, eq, and, isNull, desc, ne, or } from 'drizzle-orm';
+import { count, eq, and, isNull, isNotNull, desc, or } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
 
 import { createToken, getSessionUser, revokeToken } from '../auth.js';
 import type { AppEnv } from '../context.js';
 import type { DB } from '../db/index.js';
-import { comments, documents, teamMembers, tokens, users, versions, watches, type Document } from '../db/schema.js';
+import { comments, documentCollaborators, documents, teamMembers, tokens, users, versions, watches, type Document } from '../db/schema.js';
 import { csrfTokenFor, sessionAuth } from '../middleware.js';
+import { readableDocumentCondition, resolveDocumentAccess } from '../services/access.js';
 import { gravatarUrl } from '../services/gravatar.js';
 import {
   FREE_EMAIL_DOMAINS,
@@ -34,7 +35,7 @@ import { TokensPage, type TokenTeamOption } from '../pages/tokens.js';
 import { safeLocalPath } from '../safeRedirect.js';
 import { appCss } from '../static/appCss.js';
 
-function documentRow(db: DB, doc: Document): DocumentListRow {
+function documentRow(db: DB, doc: Document, userId: string): DocumentListRow {
   const [{ value: versionCount }] = db.select({ value: count() }).from(versions).where(eq(versions.documentId, doc.id)).all();
 
   const [{ value: openCommentCount }] = db
@@ -56,6 +57,7 @@ function documentRow(db: DB, doc: Document): DocumentListRow {
   return {
     id: doc.id,
     title: doc.title,
+    effectiveRole: resolveDocumentAccess(db, doc.id, userId)?.effectiveRole,
     ownerName: owner?.name ?? owner?.email ?? '—',
     ownerEmail: owner?.email ?? null,
     visibility: doc.visibility as DocumentListRow['visibility'],
@@ -65,34 +67,29 @@ function documentRow(db: DB, doc: Document): DocumentListRow {
   };
 }
 
-/** A team's documents, minus other users' private ones — those exist only for their creator. */
+/** Team lists use the same read policy as direct artifact access. */
 function documentRowsForTeam(db: DB, teamId: string, userId: string): DocumentListRow[] {
   return db
     .select()
     .from(documents)
-    .where(and(eq(documents.teamId, teamId), or(ne(documents.visibility, 'private'), eq(documents.createdBy, userId))))
+    .where(and(eq(documents.teamId, teamId), readableDocumentCondition(userId)))
     .orderBy(desc(documents.createdAt))
     .all()
-    .map((doc) => documentRow(db, doc));
+    .map((doc) => documentRow(db, doc, userId));
 }
 
-/**
- * "Shared with you": public documents outside the user's teams that they hold
- * a watch row on (interacting auto-watches, so commenting once is enough to
- * pin a document here; an explicit unwatch only mutes email, it doesn't lose
- * the link). Flipping a document back to team-only prunes non-member watches,
- * which removes it from this list too.
- */
+/** Accepted external grants are discoverable independently of watches; public watches retain links. */
 function sharedWithUserRows(db: DB, userId: string): DocumentListRow[] {
   return db
     .select({ document: documents })
     .from(documents)
-    .innerJoin(watches, and(eq(watches.documentId, documents.id), eq(watches.userId, userId)))
+    .leftJoin(watches, and(eq(watches.documentId, documents.id), eq(watches.userId, userId)))
+    .leftJoin(documentCollaborators, and(eq(documentCollaborators.documentId, documents.id), eq(documentCollaborators.userId, userId)))
     .leftJoin(teamMembers, and(eq(teamMembers.teamId, documents.teamId), eq(teamMembers.userId, userId)))
-    .where(and(eq(documents.visibility, 'public'), isNull(teamMembers.userId)))
+    .where(and(readableDocumentCondition(userId), isNull(teamMembers.userId), or(isNotNull(documentCollaborators.userId), and(eq(documents.visibility, 'public'), isNotNull(watches.userId)))))
     .orderBy(desc(documents.createdAt))
     .all()
-    .map((row) => documentRow(db, row.document));
+    .map((row) => documentRow(db, row.document, userId));
 }
 
 export const pageRoutes = new Hono<AppEnv>();
@@ -100,6 +97,10 @@ export const pageRoutes = new Hono<AppEnv>();
 pageRoutes.get('/signin', (c) => {
   const csrfToken = csrfTokenFor(c);
   const next = safeLocalPath(c.req.query('next'));
+  if (next?.startsWith('/invitations/')) {
+    c.header('Referrer-Policy', 'no-referrer');
+    c.header('Cache-Control', 'private, no-store');
+  }
   return c.html(<SigninPage next={next} csrfToken={csrfToken} selfSignup={c.get('config').selfSignup} />);
 });
 
@@ -116,15 +117,16 @@ pageRoutes.get('/', sessionAuth({ redirect: true }), (c) => {
     documents: documentRowsForTeam(db, membership.team.id, user.id),
   }));
 
+  const shared = sharedWithUserRows(db, user.id);
   const wizard =
-    config.selfSignup && groups.length === 0 ? { claimableDomain: claimableDomain(db, user.email) } : undefined;
+    config.selfSignup && groups.length === 0 && shared.length === 0 ? { claimableDomain: claimableDomain(db, user.email) } : undefined;
 
   return c.html(
     <DocumentsPage
       user={user}
       csrfToken={csrfToken}
       groups={groups}
-      shared={sharedWithUserRows(db, user.id)}
+      shared={shared}
       isInstanceAdmin={isInstanceAdmin(user, config)}
       wizard={wizard}
     />,

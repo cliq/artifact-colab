@@ -8,6 +8,7 @@
 import type { FC } from 'hono/jsx';
 
 import type { Document, User, Version } from '../db/schema.js';
+import type { DocumentAccess } from '../services/access.js';
 import { Layout } from './layout.js';
 
 /** A version plus who published it (null when the publisher is unknown, e.g. a deleted user). */
@@ -38,6 +39,8 @@ export interface DocumentPageProps {
   isMember: boolean;
   /** Absolute URL of the document, shown in the Share menu when public. */
   shareUrl: string;
+  /** Server-authoritative capabilities for this user and artifact. */
+  access: DocumentAccess;
 }
 
 const viewerCss = `
@@ -76,7 +79,7 @@ main { flex: 1 1 auto; min-height: 0; max-width: none; width: 100%; margin: 0; p
 .version-option .version-number { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
 .version-option .version-current { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-accent); }
 .version-option .version-details { display: block; font-size: 12px; color: var(--color-muted); margin-top: 2px; white-space: nowrap; }
-.share-panel { width: 300px; padding: 12px 14px; }
+.share-panel { left: 0; right: auto; width: 360px; max-height: min(680px, calc(100dvh - 90px)); overflow-y: auto; padding: 12px 14px; }
 .share-panel h2 { font-size: 13px; font-weight: 600; margin: 0 0 8px; padding: 0 2px; }
 .share-option { display: grid; grid-template-columns: 16px 1fr; gap: 10px; align-items: start; width: 100%; text-align: left; padding: 8px 10px; margin-bottom: 4px; border: 1px solid transparent; border-radius: 8px; background: transparent; font: inherit; color: var(--color-text); cursor: pointer; }
 .share-option:hover { background: var(--color-paper-2); transform: none; }
@@ -90,6 +93,38 @@ main { flex: 1 1 auto; min-height: 0; max-width: none; width: 100%; margin: 0; p
 .share-link-row .share-url { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 11px; color: var(--color-muted); background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 6px; padding: 5px 8px; }
 .share-copy { font: inherit; font-size: 12px; font-weight: 500; padding: 5px 12px; white-space: nowrap; }
 .share-link-note { font-size: 11.5px; color: var(--color-muted); margin: 8px 2px 0; }
+.share-section { border-top: 1px solid var(--color-border); margin-top: 12px; padding-top: 12px; }
+.share-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.share-section-title h3 { font-size: 12px; margin: 0; }
+.share-help, .share-empty, .share-feedback { font-size: 11.5px; color: var(--color-muted); margin: 5px 2px; line-height: 1.4; }
+.share-access-warning { padding: 7px 8px; margin-bottom: 8px; border-radius: 6px; background: var(--color-bg); }
+.share-feedback[data-kind='error'] { color: #b42318; }
+.share-feedback[data-kind='success'] { color: #15803d; }
+.invite-entry { display: flex; align-items: center; gap: 6px; }
+.invite-entry input { flex: 1; min-width: 0; font: inherit; font-size: 12px; padding: 7px 8px; border: 1px solid var(--color-rule-2); border-radius: 6px; }
+.invite-entry button, .share-action { font: inherit; font-size: 12px; padding: 6px 10px; white-space: nowrap; }
+.invite-chips { display: grid; gap: 6px; margin-top: 8px; }
+.invite-chip { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 5px; align-items: center; padding: 6px 7px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-bg); }
+.invite-chip-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+.invite-chip select, .access-row select { font-size: 11.5px; padding: 4px 5px; }
+.chip-remove { padding: 3px 6px; border: 0; background: transparent; color: var(--color-muted); }
+.access-list { display: grid; gap: 5px; }
+.access-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 7px 2px; border-bottom: 1px solid var(--color-border); }
+.access-row:last-child { border-bottom: 0; }
+.access-person { min-width: 0; }
+.access-email { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--color-ink); }
+.access-meta { display: block; margin-top: 1px; font-size: 10.5px; color: var(--color-muted); text-transform: capitalize; }
+.access-meta.delivery-failed { color: #b42318; }
+.access-actions { display: flex; align-items: center; gap: 4px; }
+.access-actions button { font: inherit; font-size: 11px; padding: 4px 6px; }
+.role-note { font-size: 12px; color: var(--color-muted); margin: 2px 2px 8px; }
+.request-edit { width: 100%; margin-top: 8px; font-size: 12px; }
+.upload-panel { width: 340px; padding: 12px 14px; }
+.upload-panel h2 { font-size: 13px; margin: 0 0 9px; }
+.upload-panel label { display: block; margin: 8px 0 3px; font-size: 11.5px; color: var(--color-muted); }
+.upload-panel input[type='text'], .upload-panel input[type='file'] { display: block; box-sizing: border-box; width: 100%; font: inherit; font-size: 12px; }
+.upload-panel input[type='text'] { padding: 6px 8px; border: 1px solid var(--color-rule-2); border-radius: 6px; }
+.upload-panel button { margin-top: 10px; font-size: 12px; }
 .frame-wrap { flex: 1; min-height: 0; overflow: hidden; background: #fff; }
 #artifact-frame { width: 100%; height: 100%; border: 0; background: #fff; display: block; }
 /* Compare mode: the older version on the left, the shown one on the right. */
@@ -138,22 +173,22 @@ main { flex: 1 1 auto; min-height: 0; max-width: none; width: 100%; margin: 0; p
 const shareOptions = [
   {
     value: 'private',
-    name: 'Only you',
-    hint: 'Hidden from the rest of the team. Existing comments stay in the document.',
+    name: 'Private',
+    hint: 'Only you and people you invite can access this artifact.',
     summary: 'Private',
-    note: 'Right now this link only opens for you.',
+    note: 'Only you and invited people can open this link.',
   },
   {
     value: 'team',
     name: 'Team only',
-    hint: 'Only members of your team can view and comment.',
+    hint: 'Team members can view and comment. Accepted collaborator grants persist.',
     summary: 'Share',
     note: 'Right now this link only opens for your team.',
   },
   {
     value: 'public',
     name: 'Anyone with the link',
-    hint: 'Anyone signed in with the link can view and comment.',
+    hint: 'Anyone signed in can view and comment. Accepted collaborator grants persist.',
     summary: 'Public',
     note: 'Anyone signed in can open this link.',
   },
@@ -184,13 +219,20 @@ export const DocumentPage: FC<DocumentPageProps> = ({
   canDelete,
   isMember,
   shareUrl,
+  access,
 }) => {
   const backToUrl = viewerUrl(document, shownVersion, compareVersion);
   const isCurrent = shownVersion.id === document.currentVersionId;
   const previousVersion = [...versions].reverse().find((v) => v.number < shownVersion.number) ?? null;
-  // Only the creator can make a document private (the server enforces it too).
-  const visibleShareOptions = shareOptions.filter((o) => o.value !== 'private' || document.createdBy === user.id);
+  const visibleShareOptions = access.canChangeVisibility
+    ? shareOptions.filter((option) => option.value !== 'private' || access.isOwner)
+    : [];
   const currentShare = shareOptions.find((o) => o.value === document.visibility) ?? shareOptions[1];
+  const emptyAccessMessage = document.visibility === 'private'
+    ? 'Only you have access.'
+    : document.visibility === 'team'
+      ? 'No one has been invited directly. Team members still have access.'
+      : 'No one has been invited directly. Anyone signed in with the link still has access.';
   // Rendered via dangerouslySetInnerHTML: JSX would entity-escape the JSON,
   // and entities are never decoded inside a <script> element. Escaping "<"
   // keeps a "</script>" inside any value from breaking out of the block.
@@ -201,7 +243,15 @@ export const DocumentPage: FC<DocumentPageProps> = ({
     versionNumber: shownVersion.number,
     isCurrentVersion: isCurrent,
     csrfToken,
+    userEmail: user.email,
     compare: compareVersion ? { versionNumber: compareVersion.number } : null,
+    access: {
+      effectiveRole: access.effectiveRole,
+      canComment: access.canComment,
+      canPublish: access.canPublish,
+      canManageAccess: access.canManageAccess,
+      canRequestEdit: access.canRequestEdit,
+    },
   }).replaceAll('<', '\\u003c');
   return (
     <Layout title={document.title} user={user} csrfToken={csrfToken}>
@@ -282,12 +332,16 @@ export const DocumentPage: FC<DocumentPageProps> = ({
                 </div>
               </details>
             )}
-            {isMember ? (
-              <details class="settings-menu share-menu">
+            <details class="settings-menu share-menu">
                 <summary>{currentShare.summary}</summary>
-                <div class="settings-menu-items share-panel" role="radiogroup" aria-label="Who can open this artifact">
-                  <h2>Who can open this artifact</h2>
-                  {visibleShareOptions.map((option) => (
+                <div class="settings-menu-items share-panel" aria-label="Share this artifact">
+                  <h2>{visibleShareOptions.length > 0 ? 'Who can open this artifact' : 'Share this artifact'}</h2>
+                  {access.canManageAccess && (
+                    <p class="share-help share-access-warning">
+                      Accepted collaborators keep their grants when visibility changes. With Team or Public access, lowering a role or revoking a grant may not remove access supplied by that visibility.
+                    </p>
+                  )}
+                  {visibleShareOptions.length > 0 ? visibleShareOptions.map((option) => (
                     <form method="post" action={`/d/${document.id}/share`}>
                       <input type="hidden" name="_csrf" value={csrfToken} />
                       <input type="hidden" name="visibility" value={option.value} />
@@ -299,6 +353,7 @@ export const DocumentPage: FC<DocumentPageProps> = ({
                         aria-checked={document.visibility === option.value ? 'true' : 'false'}
                         data-summary={option.summary}
                         data-note={option.note}
+                        data-visibility={option.value}
                       >
                         <span class="radio"></span>
                         <span>
@@ -307,7 +362,12 @@ export const DocumentPage: FC<DocumentPageProps> = ({
                         </span>
                       </button>
                     </form>
-                  ))}
+                  )) : (
+                    <p class="role-note">
+                      Shared with you · Your access: <strong>{access.effectiveRole}</strong>
+                      {access.effectiveRole === 'viewer' && access.canComment ? ' · Public access lets you comment' : ''}
+                    </p>
+                  )}
                   <div class="share-link-row">
                     <input class="share-url" type="text" readonly value={shareUrl} onfocus="this.select()" />
                     <button type="button" id="copy-share-link" class="share-copy">
@@ -315,12 +375,45 @@ export const DocumentPage: FC<DocumentPageProps> = ({
                     </button>
                   </div>
                   <p class="share-link-note">{currentShare.note}</p>
+                  {access.canManageAccess && (
+                    <section class="share-section" id="access-management">
+                      <div class="share-section-title"><h3>Invite people</h3></div>
+                      <p class="share-help">Enter any email address. Invitations grant access to this artifact only.</p>
+                      <div class="invite-entry">
+                        <input id="invite-email-entry" type="email" inputmode="email" placeholder="person@example.com" aria-label="Email to invite" />
+                        <button type="button" id="add-invite-email" class="secondary">Add</button>
+                      </div>
+                      <div class="invite-chips" id="invite-chips"></div>
+                      <button type="button" id="send-invitations" class="share-action" hidden>Send invitations</button>
+                      <p class="share-feedback" id="invite-feedback" aria-live="polite"></p>
+                      <div class="share-section-title"><h3>People with access</h3></div>
+                      <div class="access-list" id="access-list" data-empty-message={emptyAccessMessage}><p class="share-empty">Loading access…</p></div>
+                    </section>
+                  )}
+                  {access.canRequestEdit && (
+                    <>
+                      <button type="button" id="request-edit-permission" class="secondary request-edit">Request edit permission</button>
+                      <p class="share-feedback" id="request-edit-feedback" aria-live="polite"></p>
+                    </>
+                  )}
                 </div>
               </details>
-            ) : (
-              <span class="shared-note" title="This artifact was shared with you by its team">
-                Shared with you
-              </span>
+            {access.canPublish && (
+              <details class="settings-menu upload-menu">
+                <summary>Upload version</summary>
+                <form class="settings-menu-items upload-panel" id="version-upload-form" action={`/api/docs/${document.id}/versions`} method="post" enctype="multipart/form-data">
+                  <h2>Upload new version</h2>
+                  <input type="hidden" name="_csrf" value={csrfToken} />
+                  <label for="version-title">Title</label>
+                  <input id="version-title" type="text" name="title" value={document.title} required />
+                  <label for="version-content">HTML or Markdown file</label>
+                  <input id="version-content" type="file" name="content" accept=".html,.htm,.md,.markdown,text/html,text/markdown" required />
+                  <label for="version-assets">Assets (optional)</label>
+                  <input id="version-assets" type="file" name="assets" multiple />
+                  <button type="submit">Upload version</button>
+                  <p class="share-feedback" id="upload-feedback" aria-live="polite"></p>
+                </form>
+              </details>
             )}
             <form method="post" action={`/d/${document.id}/watch`} class="watch-form">
               <input type="hidden" name="_csrf" value={csrfToken} />
@@ -335,7 +428,7 @@ export const DocumentPage: FC<DocumentPageProps> = ({
               </button>
             </form>
             <details class="settings-menu export-menu">
-              <summary>{canDelete ? 'More' : 'Export'}</summary>
+              <summary>{access.canDelete || canDelete ? 'More' : 'Export'}</summary>
               <div class="settings-menu-items">
                 <a href={`/api/docs/${document.id}/export.md`} download={`${document.id}-comments.md`}>
                   Export comments as Markdown…
@@ -346,7 +439,7 @@ export const DocumentPage: FC<DocumentPageProps> = ({
                 <a href={`/api/docs/${document.id}/export.zip`} download>
                   Export artifact…
                 </a>
-                {canDelete && (
+                {(access.canDelete || canDelete) && (
                   <a class="danger-link" href={`/d/${document.id}/delete`}>
                     Delete artifact…
                   </a>

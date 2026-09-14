@@ -67,7 +67,7 @@ describe('DELETE artifact (POST /d/:slug/delete)', () => {
 
   function signedIn(email: string): { userId: string; sessionCookie: string } {
     const user = getOrCreateUser(db, email, NOW);
-    const { token } = createSession(db, user.id, NOW);
+    const { token } = createSession(db, user.id, new Date());
     return { userId: user.id, sessionCookie: token };
   }
 
@@ -113,13 +113,13 @@ describe('DELETE artifact (POST /d/:slug/delete)', () => {
     });
   }
 
-  test('a team member who is not the author gets a 404, and the document survives', async () => {
+  test('a team member who is not the author gets a 403, and the document survives', async () => {
     const author = signedIn('author1@acme.com');
     const member = signedIn('member1@acme.com');
     seedFullDocument('doc-guarded', 'team-a', author.userId, member.userId);
 
-    expect((await requestDelete('doc-guarded', member.sessionCookie, 'GET')).status).toBe(404);
-    expect((await requestDelete('doc-guarded', member.sessionCookie, 'POST')).status).toBe(404);
+    expect((await requestDelete('doc-guarded', member.sessionCookie, 'GET')).status).toBe(403);
+    expect((await requestDelete('doc-guarded', member.sessionCookie, 'POST')).status).toBe(403);
     expect(db.select().from(documents).where(eq(documents.id, 'doc-guarded')).get()).toBeDefined();
   });
 

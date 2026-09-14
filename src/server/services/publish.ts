@@ -8,12 +8,12 @@
 
 import { randomBytes } from 'node:crypto';
 
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import type { Config } from '../config.js';
-import type { DB } from '../db/index.js';
-import { documents, versions, type User } from '../db/schema.js';
-import { findDocumentInTeam } from '../routes/api.js';
+import type { DB, DBOrTx } from '../db/index.js';
+import { documents, versions, teamMembers, type User } from '../db/schema.js';
+import { resolveDocumentAccess } from './access.js';
 import { recomputeForVersion } from './anchorStates.js';
 import { setDocumentVisibility, type DocumentVisibility } from './documents.js';
 import { renderMarkdownArtifact } from './markdown.js';
@@ -56,16 +56,30 @@ export interface PublishInput {
 
 export type PublishOutcome =
   | { ok: true; documentId: string; versionNumber: number; url: string; orphaned: number }
-  | { ok: false; status: 400 | 404; error: string };
+  | { ok: false; status: 400 | 403 | 404; error: string };
 
-/** `teamId` comes from the publishing token, not the user — republishing via a token from a different team 404s. */
+/** Bearer publishing never leaves the token's team. */
 export function publishArtifact(db: DB, config: Config, user: User, teamId: string, input: PublishInput): PublishOutcome {
+  return db.transaction((tx) => publishWithin(tx, config, user, { kind: 'team', teamId }, input));
+}
+
+/** Session publishing targets an existing artifact and cannot alter its visibility or ownership. */
+export function publishDocumentVersion(db: DB, config: Config, user: User, documentId: string, input: Omit<PublishInput, 'documentId' | 'visibility'>): PublishOutcome {
+  return db.transaction((tx) => publishWithin(tx, config, user, { kind: 'document' }, { ...input, documentId, visibility: undefined }));
+}
+
+function publishWithin(db: DBOrTx, config: Config, user: User, scope: { kind: 'team'; teamId: string } | { kind: 'document' }, input: PublishInput): PublishOutcome {
   const { title, markdown, documentId: existingId } = input;
 
+  if (!title.trim() || title.length > 300) return { ok: false, status: 400, error: 'title is required (max 300 chars)' };
+  if (scope.kind === 'team' && !db.select().from(teamMembers).where(and(eq(teamMembers.teamId, scope.teamId), eq(teamMembers.userId, user.id))).get()) {
+    return { ok: false, status: 404, error: 'team membership required' };
+  }
   if ((input.html === undefined) === (markdown === undefined)) {
     return { ok: false, status: 400, error: 'provide exactly one of html or markdown' };
   }
   const source = input.html ?? markdown!;
+  if (source.length === 0) return { ok: false, status: 400, error: 'source is empty' };
   if (Buffer.byteLength(source, 'utf8') > MAX_HTML_BYTES) {
     return { ok: false, status: 400, error: `${input.html !== undefined ? 'html' : 'markdown'} exceeds the 5 MB cap` };
   }
@@ -89,10 +103,15 @@ export function publishArtifact(db: DB, config: Config, user: User, teamId: stri
   let docId: string;
   let versionNumber: number;
   if (existingId !== undefined) {
-    const doc = findDocumentInTeam(db, existingId, teamId, user.id);
-    if (!doc) return { ok: false, status: 404, error: `unknown document_id: ${existingId}` };
-    if (input.visibility === 'private' && doc.createdBy !== user.id) {
-      return { ok: false, status: 400, error: 'only the creator of a document can make it private' };
+    const access = resolveDocumentAccess(db, existingId, user.id);
+    const doc = access?.document;
+    if (!doc || (scope.kind === 'team' && doc.teamId !== scope.teamId)) return { ok: false, status: 404, error: `unknown document_id: ${existingId}` };
+    if (!access?.canPublish) return { ok: false, status: 403, error: 'editor permission required' };
+    if (input.visibility !== undefined && input.visibility !== doc.visibility && !access.canChangeVisibility) {
+      return { ok: false, status: 403, error: 'only the owner can change private access' };
+    }
+    if (input.visibility === 'private' && doc.visibility !== 'private' && !access.isOwner) {
+      return { ok: false, status: 403, error: 'only the creator of a document can make it private' };
     }
     docId = doc.id;
     const latest = db
@@ -108,6 +127,8 @@ export function publishArtifact(db: DB, config: Config, user: User, teamId: stri
       setDocumentVisibility(db, doc, input.visibility);
     }
   } else {
+    if (scope.kind !== 'team') return { ok: false, status: 400, error: 'document required' };
+    const teamId = scope.teamId;
     docId = slug();
     versionNumber = 1;
     db.insert(documents)

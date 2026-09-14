@@ -170,7 +170,7 @@ describe('private visibility', () => {
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain('Only you');
-    expect(html).toContain('Right now this link only opens for you.');
+    expect(html).toContain('Only you and people you invite can access this artifact.');
 
     const comments = await app.request(`/api/docs/${slug}/comments`, { headers: { cookie: creatorCookie } });
     expect(comments.status).toBe(200);
@@ -220,7 +220,7 @@ describe('private visibility', () => {
     });
     expect(attempt.ok).toBe(false);
     if (!attempt.ok) {
-      expect(attempt.status).toBe(400);
+      expect(attempt.status).toBe(403);
       expect(attempt.error).toContain('only the creator');
     }
     expect(db.select().from(documents).where(eq(documents.id, 'team-doc')).get()?.visibility).toBe('team');

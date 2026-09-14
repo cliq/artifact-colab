@@ -71,6 +71,13 @@
       "when": 1788941472398,
       "tag": "0009_agent-comments",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1789389959959,
+      "tag": "0010_private-collaboration",
+      "breakpoints": true
     }
   ]
 }

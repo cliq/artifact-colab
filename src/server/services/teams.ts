@@ -32,6 +32,8 @@ import {
   type TeamInvite,
   type User,
 } from '../db/schema.js';
+import { hasLiveDocumentInvitation } from './collaboration.js';
+import { pruneDocumentWatches } from './access.js';
 import { deleteDocumentsWithin } from './documents.js';
 
 function randomId(bytes = 8): string {
@@ -64,7 +66,7 @@ export function canRequestCode(db: DB, config: Config, email: string): boolean {
 
   if (db.select().from(teamInvites).where(eq(teamInvites.email, normalized)).get()) return true;
 
-  return db.select().from(users).where(eq(users.email, normalized)).get() !== undefined;
+  return db.select().from(users).where(eq(users.email, normalized)).get() !== undefined || hasLiveDocumentInvitation(db, normalized);
 }
 
 /**
@@ -314,19 +316,8 @@ export function removeMember(db: DB, teamId: string, userId: string, now: Date =
     tx.delete(tokens).where(and(eq(tokens.teamId, teamId), eq(tokens.userId, userId))).run();
 
     const teamDocs = tx.select({ id: documents.id }).from(documents).where(eq(documents.teamId, teamId)).all();
-    if (teamDocs.length > 0) {
-      tx.delete(watches)
-        .where(
-          and(
-            eq(watches.userId, userId),
-            inArray(
-              watches.documentId,
-              teamDocs.map((d) => d.id),
-            ),
-          ),
-        )
-        .run();
-    }
+    // Owner removal suspends every grant; ordinary removals preserve independent access.
+    for (const doc of teamDocs) pruneDocumentWatches(tx, doc.id);
     return true;
   });
 }

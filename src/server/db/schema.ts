@@ -5,7 +5,8 @@
  * tokens) are never stored in plaintext — only their hash is a column here.
  */
 
-import { AnySQLiteColumn, blob, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
+import { AnySQLiteColumn, blob, check, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -169,7 +170,7 @@ export const documents = sqliteTable(
      * 'team' | 'public' | 'private'. 'public' widens read/interact access to
      * any signed-in user who has the URL — the slug is the link secret; the
      * document is never listed for non-members. 'private' narrows it to
-     * `createdBy` alone: teammates 404 and don't see it listed. Ownership
+     * its active owner and accepted collaborators. Uninvited teammates 404. Ownership
      * stays with `teamId` either way.
      */
     visibility: text('visibility').notNull().default('team'),
@@ -182,6 +183,47 @@ export const documents = sqliteTable(
 
 export type Document = typeof documents.$inferSelect;
 export type NewDocument = typeof documents.$inferInsert;
+
+/** Artifact grants do not create team membership. Owner access is derived from documents. */
+export const documentCollaborators = sqliteTable('document_collaborators', {
+  documentId: text('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  role: text('role', { enum: ['viewer', 'editor'] }).notNull(),
+  grantedBy: text('granted_by').notNull().references(() => users.id),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  editRequestedAt: integer('edit_requested_at', { mode: 'timestamp_ms' }),
+}, (t) => [
+  primaryKey({ columns: [t.documentId, t.userId] }),
+  index('document_collaborators_user_document_idx').on(t.userId, t.documentId),
+  check('document_collaborators_role_check', sql`${t.role} in ('viewer', 'editor')`),
+]);
+
+export const documentInvitations = sqliteTable('document_invitations', {
+  id: text('id').primaryKey(),
+  documentId: text('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
+  email: text('email').notNull(),
+  role: text('role', { enum: ['viewer', 'editor'] }).notNull(),
+  invitedBy: text('invited_by').notNull().references(() => users.id),
+  tokenHash: text('token_hash').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+  status: text('status', { enum: ['pending', 'accepted', 'revoked', 'expired'] }).notNull().default('pending'),
+  acceptedBy: text('accepted_by').references(() => users.id),
+  acceptedAt: integer('accepted_at', { mode: 'timestamp_ms' }),
+  deliveryStatus: text('delivery_status'),
+  lastDeliveryAt: integer('last_delivery_at', { mode: 'timestamp_ms' }),
+}, (t) => [
+  uniqueIndex('document_invitations_document_email_idx').on(t.documentId, t.email),
+  index('document_invitations_email_status_idx').on(t.email, t.status),
+  uniqueIndex('document_invitations_token_hash_idx').on(t.tokenHash),
+  check('document_invitations_role_check', sql`${t.role} in ('viewer', 'editor')`),
+  check('document_invitations_status_check', sql`${t.status} in ('pending', 'accepted', 'revoked', 'expired')`),
+]);
+
+export type DocumentCollaborator = typeof documentCollaborators.$inferSelect;
+export type DocumentInvitation = typeof documentInvitations.$inferSelect;
 
 export const assets = sqliteTable(
   'assets',

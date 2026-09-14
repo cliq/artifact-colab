@@ -17,7 +17,7 @@ import type { Config } from './config.js';
 import type { AppEnv } from './context.js';
 import type { DB } from './db/index.js';
 import type { Token, User } from './db/schema.js';
-import { comments } from './db/schema.js';
+import { comments, tokens, teamMembers } from './db/schema.js';
 import { bearerAuth } from './middleware.js';
 import {
   buildThread,
@@ -28,6 +28,7 @@ import {
   sortTopLevel,
   topLevelCommentsFor,
 } from './routes/api.js';
+import { resolveDocumentAccess } from './services/access.js';
 import { assetsForDocument } from './services/assets.js';
 import type { IncomingAsset } from './services/assets.js';
 import { indexVersionHtml } from './services/anchorStates.js';
@@ -47,7 +48,13 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
   const via: CommentVia = { tokenId: token.id, tokenLabel: token.label };
   const server = new McpServer({ name: 'artifact-colab', version: '1.0.0' });
   /** Only tool calls count as token use — the connect handshake (initialize, tools/list) does not. */
-  const used = () => touchToken(db, token.id, new Date());
+  const used = () => {
+    const live = db.select().from(tokens).where(and(eq(tokens.id, token.id), eq(tokens.userId, user.id), eq(tokens.teamId, teamId))).get();
+    const member = db.select().from(teamMembers).where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, user.id))).get();
+    if (!live || !member) return false;
+    touchToken(db, token.id, new Date());
+    return true;
+  };
 
   server.registerTool(
     'publish_artifact',
@@ -77,7 +84,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
           .enum(['team', 'public', 'private'])
           .optional()
           .describe(
-            "Who can open the URL: 'team' (members only, the default for new documents), 'public' (anyone signed in on the instance who has the link), or 'private' (only the creator; hidden from the rest of the team — only the creator can set it). Omitted on a republish keeps the document's current setting",
+            "Who can open the URL: 'team' (members only, the default for new documents), 'public' (anyone signed in on the instance who has the link), or 'private' (the owner and accepted collaborators; only the owner manages private access). Omitted on a republish keeps the document's current setting",
           ),
         assets: z
           .array(
@@ -92,7 +99,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       }),
     },
     async ({ title, html, markdown, document_id, visibility, assets: incomingAssets }) => {
-      used();
+      if (!used()) return toolError('token is no longer authorized');
       const decodedAssets: IncomingAsset[] = [];
       for (const a of incomingAssets ?? []) {
         const data = Buffer.from(a.data_base64, 'base64');
@@ -118,7 +125,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         lines.push('The URL is shareable with anyone signed in on this instance.');
       }
       if (visibility === 'private') {
-        lines.push('The document is private: only its creator can open it; it is hidden from the rest of the team.');
+        lines.push('The document is private: only its active owner and accepted collaborators can open it.');
       }
       if (outcome.orphaned > 0) {
         const n = outcome.orphaned;
@@ -150,7 +157,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       }),
     },
     async ({ document_id, version }) => {
-      used();
+      if (!used()) return toolError('token is no longer authorized');
       const doc = findDocumentInTeam(db, document_id, teamId, user.id);
       if (!doc) return toolError(`unknown document_id: ${document_id}`);
 
@@ -169,7 +176,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         headerLines.push('Visibility: public (anyone signed in on the instance can open the URL).');
       }
       if (doc.visibility === 'private') {
-        headerLines.push('Visibility: private (only the creator can open it; hidden from the rest of the team).');
+        headerLines.push('Visibility: private (the active owner and accepted collaborators can open it).');
       }
       if (assetNames.length > 0) {
         headerLines.push(`Referenced assets (stored separately, substituted when rendering): ${assetNames.join(', ')}`);
@@ -208,7 +215,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       }),
     },
     async ({ document_id, status }) => {
-      used();
+      if (!used()) return toolError('token is no longer authorized');
       const doc = findDocumentInTeam(db, document_id, teamId, user.id);
       if (!doc) return toolError(`unknown document_id: ${document_id}`);
       let topLevel = sortTopLevel(topLevelCommentsFor(db, doc.id));
@@ -254,7 +261,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       }),
     },
     async ({ body, document_id, quoted_text, comment_id }) => {
-      used();
+      if (!used()) return toolError('token is no longer authorized');
       if (comment_id !== undefined) {
         if (quoted_text !== undefined) {
           return toolError('pass either comment_id (to reply) or document_id + quoted_text (to open a new thread), not both');
@@ -263,6 +270,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         const thread = target?.parentId ? db.select().from(comments).where(eq(comments.id, target.parentId)).get() : target;
         const doc = thread ? findDocumentInTeam(db, thread.documentId, teamId, user.id) : undefined;
         if (!thread || !doc) return toolError(`unknown comment_id: ${comment_id}`);
+        if (!resolveDocumentAccess(db, doc.id, user.id)?.canComment) return toolError('editor permission required');
         if (document_id !== undefined && document_id !== doc.id) {
           return toolError(`comment ${comment_id} belongs to document ${doc.id}, not ${document_id}`);
         }
@@ -285,6 +293,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       const version = findVersion(db, doc);
       if (!version) return toolError(`document ${document_id} has no published version to comment on`);
 
+      if (!resolveDocumentAccess(db, doc.id, user.id)?.canComment) return toolError('editor permission required');
       const located = locateQuote(indexVersionHtml(version.html), quoted_text);
       if (!located.ok) {
         switch (located.reason) {
@@ -333,9 +342,10 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       inputSchema: z.object({ comment_id: z.string() }),
     },
     async ({ comment_id }) => {
-      used();
+      if (!used()) return toolError('token is no longer authorized');
       const owned = findOwnedTopLevelComment(db, comment_id, { teamId, userId: user.id });
       if (!owned) return toolError(`unknown comment_id (or not a top-level comment): ${comment_id}`);
+      if (!resolveDocumentAccess(db, owned.document.id, user.id)?.canComment) return toolError('editor permission required');
       db.update(comments)
         .set({ status: 'resolved', resolvedAt: new Date(), resolvedBy: user.id })
         .where(and(eq(comments.id, comment_id), eq(comments.documentId, owned.document.id)))
@@ -354,7 +364,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       inputSchema: z.object({ document_id: z.string() }),
     },
     async ({ document_id }) => {
-      used();
+      if (!used()) return toolError('token is no longer authorized');
       const doc = findDocumentInTeam(db, document_id, teamId, user.id);
       if (!doc) return toolError(`unknown document_id: ${document_id}`);
       if (doc.createdBy !== user.id) {

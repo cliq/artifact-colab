@@ -11,7 +11,7 @@
 import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 
-import type { DB } from '../db/index.js';
+import type { DBOrTx } from '../db/index.js';
 import { assets, type Asset } from '../db/schema.js';
 
 /** Per-asset decoded size cap. */
@@ -33,7 +33,7 @@ export interface IncomingAsset {
 }
 
 /** Insert or replace (by name) the document's assets. */
-export function upsertAssets(db: DB, documentId: string, incoming: IncomingAsset[], now: Date): void {
+export function upsertAssets(db: DBOrTx, documentId: string, incoming: IncomingAsset[], now: Date): void {
   for (const asset of incoming) {
     db
       .insert(assets)
@@ -53,7 +53,7 @@ export function upsertAssets(db: DB, documentId: string, incoming: IncomingAsset
   }
 }
 
-export function assetsForDocument(db: DB, documentId: string): Asset[] {
+export function assetsForDocument(db: DBOrTx, documentId: string): Asset[] {
   return db.select().from(assets).where(eq(assets.documentId, documentId)).all();
 }
 

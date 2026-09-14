@@ -88,6 +88,13 @@ authRoutes.post('/auth/verify-code', async (c) => {
     }
   }
 
+  // Admission can change while the code is in flight (for example, an
+  // artifact invitation can be cancelled). Recheck immediately before an
+  // unknown email is allowed to create its account.
+  if (!canRequestCode(db, config, email)) {
+    return c.json({ error: 'invalid' }, 400);
+  }
+
   const user = getOrCreateUser(db, email, now);
   const session = createSession(db, user.id, now);
   setSessionCookie(c, session.token, SESSION_MAX_AGE_SECONDS);

@@ -16,24 +16,27 @@ export interface DocumentListRow {
   /** The creator's display name, falling back to their email. */
   ownerName: string;
   ownerEmail: string | null;
-  /** Private documents are listed only for their creator. */
+  /** Private documents are listed for their active owner and accepted collaborators. */
   visibility: 'private' | 'team' | 'public';
   versionCount: number;
   openCommentCount: number;
   lastPublishedAt: Date | null;
+  /** Effective role under the same policy used by the artifact page. */
+  effectiveRole?: 'owner' | 'editor' | 'viewer';
 }
 
 /** Column label per share level; `title` explains who the link opens for. */
 const shareLabels: Record<DocumentListRow['visibility'], { label: string; title: string }> = {
-  private: { label: 'Private', title: 'Only you can open this artifact' },
-  team: { label: 'Team', title: 'Only members of the team can open this artifact' },
+  private: { label: 'Private', title: 'Only the owner and invited people can open this artifact' },
+  team: { label: 'Team', title: 'Team members and invited people can open this artifact' },
   public: { label: 'Public', title: 'Anyone signed in with the link can open this artifact' },
 };
 
-const ShareBadge: FC<{ visibility: DocumentListRow['visibility'] }> = ({ visibility }) => {
+const ShareBadge: FC<{ visibility: DocumentListRow['visibility']; effectiveRole?: DocumentListRow['effectiveRole'] }> = ({ visibility, effectiveRole }) => {
   const share = shareLabels[visibility];
+  const role = effectiveRole && effectiveRole !== 'owner' ? ` · Your role: ${effectiveRole}` : '';
   return (
-    <span class={`share-badge share-badge-${visibility}`} title={share.title}>
+    <span class={`share-badge share-badge-${visibility}`} title={`${share.title}${role}`}>
       {share.label}
     </span>
   );
@@ -85,7 +88,7 @@ const DocumentsTable: FC<{ documents: DocumentListRow[] }> = ({ documents }) => 
             </div>
           </td>
           <td>
-            <ShareBadge visibility={doc.visibility} />
+            <ShareBadge visibility={doc.visibility} effectiveRole={doc.effectiveRole} />
           </td>
           <td>{doc.versionCount}</td>
           <td>{doc.openCommentCount}</td>
@@ -138,7 +141,10 @@ const TeamWizard: FC<{ csrfToken: string; wizard: TeamWizardProps }> = ({ csrfTo
 const SharedSection: FC<{ documents: DocumentListRow[] }> = ({ documents }) => (
   <section class="team-group">
     <div class="page-title-row">
-      <h2>Shared with you</h2>
+      <div>
+        <h2>Shared with you</h2>
+        <p class="shared-section-note">Artifacts you can access through a direct invitation or a shared link.</p>
+      </div>
     </div>
     <DocumentsTable documents={documents} />
   </section>

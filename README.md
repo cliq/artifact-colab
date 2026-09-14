@@ -6,6 +6,14 @@ Claude publishes HTML artifacts straight from a session via MCP. Teammates open 
 text, and leave comments — like a Google Doc, but for artifacts. Claude then pulls the open threads back through
 MCP, revises, and republishes; comments re-anchor onto the new version so the team can verify and resolve.
 
+## Private collaboration
+
+Choose **Private** in an artifact's Share panel to limit access to you and the people you invite. Enter email addresses (an optional leading `@` is accepted), choose Viewer or Editor for each, and send invitations. Each recipient signs in with their invited email and explicitly accepts the link. Invitations expire after seven days; the owner can resend, change roles, cancel invitations, or remove access in Share. Delivery failures appear individually so successful invitations need not be sent again.
+
+Viewers can read versions, compare changes, export, and watch comments. **Request edit permission** emails the owner a link to the Share panel; the owner decides whether to grant Editor access. Requests have a daily cooldown. Editors can comment, reply, react, resolve threads, and use **Upload new version** with HTML or Markdown and optional assets. Artifact invitations never add team membership, and external or teamless Editors can upload directly without creating a team or token. Team-scoped REST/MCP tokens remain restricted to their own team.
+
+Accepted artifacts appear in team lists or **Shared with you**, independently of watching. Explicit grants persist across visibility changes; Team/Public access may give someone broader rights. Private restores the assigned roles. Only the owner manages collaborators or changes a private artifact's visibility. If the owner leaves the owning team, private access and invitations are suspended until their membership is restored. New artifacts still default to Team visibility.
+
 ## Setup
 
 Requires [Docker](https://docs.docker.com/get-docker/), a [Resend](https://resend.com) API key for sign-in emails,
@@ -20,8 +28,8 @@ and a host to run it on.
    BASE_URL=https://colab.yourcompany.com
    ```
 
-   `INSTANCE_ADMIN_EMAILS` bootstraps who can administer the instance. Teams are the tenancy boundary: documents
-   belong to a team and only its members see them. Instance admins create teams at `/admin`, attach email domains
+   `INSTANCE_ADMIN_EMAILS` bootstraps who can administer the instance. Documents belong to a team; visibility and
+   explicit artifact invitations determine who can access them. Instance admins create teams at `/admin`, attach email domains
    (anyone signing in from an attached domain auto-joins that team), and appoint team admins, who invite and
    manage members — including guests from other domains. See `.env.example` for the full list of options.
 
@@ -84,7 +92,7 @@ production — the server refuses to start if `DEV_LOGIN_CODE` is set while `NOD
 - Type `@` in a comment to tag a teammate from the picker. A tagged person starts watching the artifact right away
   (even if they had opted out) and the comment reaches them in the next digest, flagged as a mention. Agents can tag
   people too, by writing `@their@email` in the body of an `add_comment` call. Only people who can open the artifact
-  can be tagged: on an "only me" artifact nobody is, so a mention never sends anyone comments they can't read.
+  can be tagged: on a Private artifact, only its active owner and accepted collaborators are eligible.
 - Artifacts run inside a sandboxed iframe; their scripts can't touch the app or your session. The sandbox has no
   Web Storage of its own, so the viewer stands in: an artifact's `localStorage`/`sessionStorage` is kept per
   document in your browser and comes back on the next visit, like it would on claude.ai.
@@ -104,4 +112,3 @@ production — the server refuses to start if `DEV_LOGIN_CODE` is set while `NOD
 ## License
 
 [MIT](LICENSE) © Cliq Consulting LLC
-

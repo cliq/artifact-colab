@@ -16,7 +16,7 @@ import { csrfTokenFor } from '../middleware.js';
 import { DocumentDeletePage, DocumentPage } from '../pages/document.js';
 import { safeLocalPath } from '../safeRedirect.js';
 import { deleteDocumentCascade, isDocumentVisibility, setDocumentVisibility } from '../services/documents.js';
-import { isTeamAdmin } from '../services/teams.js';
+import { resolveDocumentAccess } from '../services/access.js';
 import { isWatching, setWatching } from '../services/watches.js';
 import { findDocumentForUser, findDocumentForViewer } from './api.js';
 
@@ -40,15 +40,10 @@ export function resetViewerCache(): void {
 
 export const documentRoutes = new Hono<AppEnv>();
 
-/**
- * True when the signed-in user may delete this document: its author, or an
- * admin of its team. Callers must already have established membership
- * (`findDocumentForUser`) — a public document's creator who left the team is a
- * guest, not an owner.
- */
+/** Private deletion is owner-only; broader artifacts retain team-admin deletion. */
 export function canDeleteDocument(c: Context<AppEnv>, doc: Document): boolean {
   const user = c.get('user');
-  return doc.createdBy === user.id || isTeamAdmin(c.get('db'), doc.teamId, user.id);
+  return resolveDocumentAccess(c.get('db'), doc.id, user.id)?.canDelete ?? false;
 }
 
 /** The document, if the requester may delete it, or null → the caller must 404 (matching the admin surfaces). */
@@ -127,16 +122,15 @@ documentRoutes.get('/d/:slug', (c) => {
       shownVersion={shown}
       compareVersion={compareVersion}
       watching={isWatching(db, doc.id, user.id)}
-      canDelete={access.isMember && canDeleteDocument(c, doc)}
+      canDelete={access.canDelete}
+      access={access}
       isMember={access.isMember}
       shareUrl={`${config.baseUrl}/d/${doc.id}`}
     />,
   );
 });
 
-// Any member may toggle team/public (consistent with the flat publish/comment
-// model); only the creator may make a document private. Non-members 404 like
-// every other member-gated action.
+// Team members retain team/public visibility controls; private transitions are owner-only.
 documentRoutes.post('/d/:slug/share', async (c) => {
   const user = c.get('user');
   const db = c.get('db');
@@ -146,8 +140,10 @@ documentRoutes.post('/d/:slug/share', async (c) => {
   // form body streams in can't resume and expose team content.
   const body = await c.req.parseBody();
 
-  const doc = findDocumentForUser(db, c.req.param('slug'), user.id);
-  if (!doc) return c.notFound();
+  const access = resolveDocumentAccess(db, c.req.param('slug'), user.id);
+  if (!access) return c.notFound();
+  if (!access.canChangeVisibility) return c.text('only the owner can change private access', 403);
+  const doc = access.document;
 
   const visibility = body['visibility'];
   if (!isDocumentVisibility(visibility)) return c.text('visibility must be "team", "public" or "private"', 400);
@@ -162,7 +158,7 @@ documentRoutes.post('/d/:slug/share', async (c) => {
 
 documentRoutes.get('/d/:slug/delete', (c) => {
   const doc = deletableDocument(c, c.req.param('slug'));
-  if (!doc) return c.notFound();
+  if (!doc) return resolveDocumentAccess(c.get('db'), c.req.param('slug'), c.get('user').id) ? c.text('deletion not permitted', 403) : c.notFound();
   const db = c.get('db');
 
   const counts = {
@@ -176,9 +172,10 @@ documentRoutes.get('/d/:slug/delete', (c) => {
   return c.html(<DocumentDeletePage user={c.get('user')} csrfToken={csrfTokenFor(c)} document={doc} counts={counts} />);
 });
 
-documentRoutes.post('/d/:slug/delete', (c) => {
+documentRoutes.post('/d/:slug/delete', async (c) => {
+  await c.req.parseBody();
   const doc = deletableDocument(c, c.req.param('slug'));
-  if (!doc) return c.notFound();
+  if (!doc) return resolveDocumentAccess(c.get('db'), c.req.param('slug'), c.get('user').id) ? c.text('deletion not permitted', 403) : c.notFound();
 
   deleteDocumentCascade(c.get('db'), doc.id);
   return c.redirect('/', 302);

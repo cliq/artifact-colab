@@ -115,3 +115,42 @@ describe('teams migration (0003)', () => {
     expect(sqlite.pragma('foreign_key_check')).toEqual([]);
   });
 });
+
+test('collaboration migration preserves existing visibility/defaults and creates no grants', () => {
+  const folder = mkdtempSync(join(tmpdir(), 'ac-collaboration-migration-'));
+  const path = join(folder, 'app.db');
+  const seed = new Database(path);
+  const journal = JSON.parse(readFileSync('drizzle/meta/_journal.json', 'utf8')) as { entries: { idx: number; tag: string; when: number }[] };
+  const prior = journal.entries.filter((entry) => entry.idx < 10);
+  try {
+    for (const entry of prior) {
+      for (const statement of readFileSync(`drizzle/${entry.tag}.sql`, 'utf8').split('--> statement-breakpoint')) seed.exec(statement);
+    }
+    seed.exec('CREATE TABLE __drizzle_migrations (id SERIAL PRIMARY KEY, hash text NOT NULL, created_at numeric)');
+    seed.prepare('INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)').run('pre-collaboration', prior.at(-1)!.when);
+    seed.exec("INSERT INTO users (id,email,created_at) VALUES ('owner','owner@example.com',0),('member','member@example.com',0)");
+    seed.exec("INSERT INTO teams (id,name,created_at) VALUES ('team','Team',0)");
+    seed.exec("INSERT INTO team_members (team_id,user_id,created_at) VALUES ('team','owner',0),('team','member',0)");
+    for (const visibility of ['private', 'team', 'public']) {
+      seed.prepare('INSERT INTO documents (id,title,team_id,created_by,visibility,created_at) VALUES (?,?,?,?,?,?)').run(visibility, visibility, 'team', 'owner', visibility, 0);
+    }
+    seed.close();
+    const migrated = openDb(path);
+    try {
+      expect(migrated.sqlite.prepare('SELECT id, visibility FROM documents ORDER BY id').all()).toEqual([
+        { id: 'private', visibility: 'private' }, { id: 'public', visibility: 'public' }, { id: 'team', visibility: 'team' },
+      ]);
+      expect(migrated.sqlite.prepare('SELECT * FROM document_collaborators').all()).toEqual([]);
+      expect(migrated.sqlite.prepare('SELECT * FROM document_invitations').all()).toEqual([]);
+      migrated.sqlite.exec("INSERT INTO documents (id,title,team_id,created_by,created_at) VALUES ('default','Default','team','owner',0)");
+      expect(migrated.sqlite.prepare("SELECT visibility FROM documents WHERE id='default'").get()).toEqual({ visibility: 'team' });
+      expect(() => migrated.sqlite.exec("INSERT INTO document_collaborators (document_id,user_id,role,granted_by,created_at,updated_at) VALUES ('private','member','owner','owner',0,0)")).toThrow(/CHECK constraint/);
+      expect(migrated.sqlite.pragma('foreign_key_check')).toEqual([]);
+    } finally {
+      migrated.sqlite.close();
+    }
+  } finally {
+    if (seed.open) seed.close();
+    rmSync(folder, { recursive: true, force: true });
+  }
+});

@@ -134,7 +134,7 @@ describe('POST /teams (wizard route)', () => {
 
   function signedInSession(email: string): { userId: string; sessionCookie: string } {
     const user = getOrCreateUser(db, email, NOW);
-    const { token } = createSession(db, user.id, NOW);
+    const { token } = createSession(db, user.id, new Date());
     return { userId: user.id, sessionCookie: token };
   }
 
