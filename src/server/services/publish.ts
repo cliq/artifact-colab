@@ -12,11 +12,12 @@ import { and, eq } from 'drizzle-orm';
 
 import type { Config } from '../config.js';
 import type { DB, DBOrTx } from '../db/index.js';
-import { documents, versions, teamMembers, type User } from '../db/schema.js';
+import { documents, projects, versions, teamMembers, type User } from '../db/schema.js';
 import { resolveDocumentAccess } from './access.js';
 import { recomputeForVersion } from './anchorStates.js';
 import { setDocumentVisibility, type DocumentVisibility } from './documents.js';
 import { renderMarkdownArtifact } from './markdown.js';
+import { ProjectError, resolveProjectForPublish } from './projects.js';
 import { autoWatch } from './watches.js';
 import {
   isValidAssetName,
@@ -52,20 +53,44 @@ export interface PublishInput {
   assets?: IncomingAsset[];
   /** Sets it on create (default 'team'); on republish, updates it when given, keeps the current value when omitted. */
   visibility?: DocumentVisibility;
+  /** Omitted preserves assignment; null clears it; a name resolves or creates a Project. */
+  project?: string | null;
 }
 
+type BasePublishSuccess = { ok: true; documentId: string; versionNumber: number; url: string; orphaned: number };
 export type PublishOutcome =
-  | { ok: true; documentId: string; versionNumber: number; url: string; orphaned: number }
+  | (BasePublishSuccess & { project: string | null; projectCreated: boolean })
+  | { ok: false; status: 400 | 403 | 404 | 409; error: string };
+export type DocumentVersionPublishOutcome =
+  | BasePublishSuccess
   | { ok: false; status: 400 | 403 | 404; error: string };
 
 /** Bearer publishing never leaves the token's team. */
 export function publishArtifact(db: DB, config: Config, user: User, teamId: string, input: PublishInput): PublishOutcome {
-  return db.transaction((tx) => publishWithin(tx, config, user, { kind: 'team', teamId }, input));
+  try {
+    return db.transaction((tx) => publishWithin(tx, config, user, { kind: 'team', teamId }, input));
+  } catch (error) {
+    if (error instanceof ProjectError) return { ok: false, status: error.status, error: error.message };
+    throw error;
+  }
 }
 
 /** Session publishing targets an existing artifact and cannot alter its visibility or ownership. */
-export function publishDocumentVersion(db: DB, config: Config, user: User, documentId: string, input: Omit<PublishInput, 'documentId' | 'visibility'>): PublishOutcome {
-  return db.transaction((tx) => publishWithin(tx, config, user, { kind: 'document' }, { ...input, documentId, visibility: undefined }));
+export function publishDocumentVersion(
+  db: DB,
+  config: Config,
+  user: User,
+  documentId: string,
+  input: Omit<PublishInput, 'documentId' | 'visibility' | 'project'>,
+): DocumentVersionPublishOutcome {
+  const outcome = db.transaction((tx) =>
+    publishWithin(tx, config, user, { kind: 'document' }, { ...input, documentId, visibility: undefined, project: undefined }),
+  );
+  if (!outcome.ok) {
+    return { ok: false, status: outcome.status === 409 ? 400 : outcome.status, error: outcome.error };
+  }
+  const { documentId: savedId, versionNumber, url, orphaned } = outcome;
+  return { ok: true, documentId: savedId, versionNumber, url, orphaned };
 }
 
 function publishWithin(db: DBOrTx, config: Config, user: User, scope: { kind: 'team'; teamId: string } | { kind: 'document' }, input: PublishInput): PublishOutcome {
@@ -102,6 +127,9 @@ function publishWithin(db: DBOrTx, config: Config, user: User, scope: { kind: 't
   const now = new Date();
   let docId: string;
   let versionNumber: number;
+  let projectName: string | null = null;
+  let projectCreated = false;
+  let projectId: string | null | undefined;
   if (existingId !== undefined) {
     const access = resolveDocumentAccess(db, existingId, user.id);
     const doc = access?.document;
@@ -113,6 +141,18 @@ function publishWithin(db: DBOrTx, config: Config, user: User, scope: { kind: 't
     if (input.visibility === 'private' && doc.visibility !== 'private' && !access.isOwner) {
       return { ok: false, status: 403, error: 'only the creator of a document can make it private' };
     }
+    if (scope.kind === 'team') {
+      if (input.project === null) {
+        projectId = null;
+      } else if (input.project !== undefined) {
+        const resolved = resolveProjectForPublish(db, scope.teamId, user.id, input.project);
+        projectId = resolved.project.id;
+        projectName = resolved.project.name;
+        projectCreated = resolved.created;
+      } else if (doc.projectId !== null) {
+        projectName = db.select({ name: projects.name }).from(projects).where(eq(projects.id, doc.projectId)).get()?.name ?? null;
+      }
+    }
     docId = doc.id;
     const latest = db
       .select({ number: versions.number })
@@ -121,7 +161,10 @@ function publishWithin(db: DBOrTx, config: Config, user: User, scope: { kind: 't
       .all()
       .reduce((max, v) => Math.max(max, v.number), 0);
     versionNumber = latest + 1;
-    db.update(documents).set({ title }).where(eq(documents.id, docId)).run();
+    db.update(documents)
+      .set({ title, ...(projectId !== undefined ? { projectId } : {}) })
+      .where(eq(documents.id, docId))
+      .run();
     if (input.visibility !== undefined && input.visibility !== doc.visibility) {
       // Through the shared flip path: reverting to team-only must prune outsiders' watches.
       setDocumentVisibility(db, doc, input.visibility);
@@ -129,10 +172,25 @@ function publishWithin(db: DBOrTx, config: Config, user: User, scope: { kind: 't
   } else {
     if (scope.kind !== 'team') return { ok: false, status: 400, error: 'document required' };
     const teamId = scope.teamId;
+    if (input.project !== undefined && input.project !== null) {
+      const resolved = resolveProjectForPublish(db, teamId, user.id, input.project);
+      projectId = resolved.project.id;
+      projectName = resolved.project.name;
+      projectCreated = resolved.created;
+    }
     docId = slug();
     versionNumber = 1;
     db.insert(documents)
-      .values({ id: docId, title, teamId, createdBy: user.id, visibility: input.visibility ?? 'team', currentVersionId: null, createdAt: now })
+      .values({
+        id: docId,
+        title,
+        teamId,
+        createdBy: user.id,
+        visibility: input.visibility ?? 'team',
+        projectId: projectId ?? null,
+        currentVersionId: null,
+        createdAt: now,
+      })
       .run();
   }
 
@@ -145,5 +203,13 @@ function publishWithin(db: DBOrTx, config: Config, user: User, scope: { kind: 't
   autoWatch(db, docId, user.id, now);
   const { orphaned } = recomputeForVersion(db, docId, versionId);
 
-  return { ok: true, documentId: docId, versionNumber, url: `${config.baseUrl}/d/${docId}`, orphaned };
+  return {
+    ok: true,
+    documentId: docId,
+    versionNumber,
+    url: `${config.baseUrl}/d/${docId}`,
+    orphaned,
+    project: projectName,
+    projectCreated,
+  };
 }

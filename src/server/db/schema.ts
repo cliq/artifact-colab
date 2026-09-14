@@ -154,6 +154,27 @@ export const tokens = sqliteTable('tokens', {
 export type Token = typeof tokens.$inferSelect;
 export type NewToken = typeof tokens.$inferInsert;
 
+export const projects = sqliteTable(
+  'projects',
+  {
+    id: text('id').primaryKey(),
+    teamId: text('team_id')
+      .notNull()
+      .references(() => teams.id),
+    name: text('name').notNull(),
+    nameKey: text('name_key').notNull(),
+    createdBy: text('created_by')
+      .notNull()
+      .references(() => users.id),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [uniqueIndex('projects_team_id_name_key_idx').on(table.teamId, table.nameKey)],
+);
+
+export type Project = typeof projects.$inferSelect;
+export type NewProject = typeof projects.$inferInsert;
+
 export const documents = sqliteTable(
   'documents',
   {
@@ -163,6 +184,7 @@ export const documents = sqliteTable(
     teamId: text('team_id')
       .notNull()
       .references(() => teams.id),
+    projectId: text('project_id').references(() => projects.id),
     createdBy: text('created_by')
       .notNull()
       .references(() => users.id),
@@ -178,7 +200,10 @@ export const documents = sqliteTable(
     currentVersionId: text('current_version_id'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
-  (table) => [index('documents_team_id_idx').on(table.teamId)],
+  (table) => [
+    index('documents_team_id_idx').on(table.teamId),
+    index('documents_team_id_project_id_idx').on(table.teamId, table.projectId),
+  ],
 );
 
 export type Document = typeof documents.$inferSelect;

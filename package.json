@@ -9,7 +9,9 @@
   "scripts": {
     "dev": "tsx watch src/server/index.ts",
     "build:annotator": "esbuild src/annotator/main.ts --bundle --format=iife --global-name=ArtifactAnnotator --target=es2020 --minify --outfile=dist/annotator.js",
-    "build:client": "esbuild src/client/viewer.ts --bundle --format=iife --target=es2020 --minify --outfile=dist/viewer.js",
+    "build:viewer": "esbuild src/client/viewer.ts --bundle --format=iife --target=es2020 --minify --outfile=dist/viewer.js",
+    "build:projects": "esbuild src/client/projects.ts --bundle --format=iife --target=es2020 --minify --outfile=dist/projects.js",
+    "build:client": "npm run build:viewer && npm run build:projects",
     "build:server": "tsc -p tsconfig.build.json",
     "build": "npm run build:annotator && npm run build:client && npm run build:server",
     "check": "tsc --noEmit && vitest run",

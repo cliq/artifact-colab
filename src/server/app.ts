@@ -20,6 +20,7 @@ import { documentRoutes } from './routes/document.js';
 import { frameRoutes } from './routes/frame.js';
 import { pageRoutes } from './routes/pages.js';
 import { publishRoutes } from './routes/publish.js';
+import { projectRoutes } from './routes/projects.js';
 import { tokensRoutes } from './routes/tokens.js';
 
 // Publishing legitimately carries multi-megabyte bodies (5 MB html + 20 MB of
@@ -69,6 +70,7 @@ export function createApp(deps: { db: DB; config: Config }): Hono<AppEnv> {
   app.use('/api/*', sessionAuth({ redirect: false }));
   app.route('/', apiRoutes);
   app.route('/', collaborationRoutes);
+  app.route('/', projectRoutes);
 
   // Viewer page + sandboxed artifact frame (HTML routes redirect to sign-in)
   app.use('/d/*', sessionAuth({ redirect: true }));

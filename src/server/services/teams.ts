@@ -20,6 +20,7 @@ import type { Config } from '../config.js';
 import type { DB, DBOrTx } from '../db/index.js';
 import {
   documents,
+  projects,
   teamDomains,
   teamExclusions,
   teamInvites,
@@ -367,6 +368,8 @@ export function deleteTeamCascade(db: DB, teamId: string): void {
       .all()
       .map((d) => d.id);
     deleteDocumentsWithin(tx, docIds);
+
+    tx.delete(projects).where(eq(projects.teamId, teamId)).run();
 
     tx.delete(teamInvites).where(eq(teamInvites.teamId, teamId)).run();
     tx.delete(teamDomains).where(eq(teamDomains.teamId, teamId)).run();

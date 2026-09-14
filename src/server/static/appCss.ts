@@ -235,6 +235,7 @@ main.documents-page {
 }
 
 .documents-table-scroll {
+  position: relative;
   overflow-x: auto;
 }
 
@@ -772,5 +773,227 @@ select {
   border: 1px solid var(--color-rule-2);
   border-radius: 4px;
   padding: 0.1rem 0.4rem;
+}
+
+/* Project browsing and assignment. */
+.documents-heading,
+.project-heading,
+.team-actions,
+.view-switch,
+.project-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.documents-heading,
+.project-heading {
+  justify-content: space-between;
+}
+
+.documents-heading h1,
+.project-heading h1 {
+  margin-bottom: 0;
+}
+
+.documents-heading {
+  margin-bottom: 1.25rem;
+}
+
+.team-actions {
+  margin-left: auto;
+}
+
+.view-switch {
+  gap: 0.3rem;
+  font-size: 0.875rem;
+}
+
+.view-switch a {
+  color: var(--color-muted);
+  padding: 0.25rem 0.55rem;
+  border-radius: var(--radius-pill);
+}
+
+.view-switch a[aria-current='page'] {
+  color: var(--color-accent-ink);
+  background: var(--color-accent);
+  text-decoration: none;
+}
+
+.compact-button {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.document-project-action {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.project-tag {
+  display: inline-block;
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-ink-2);
+  background: var(--color-accent-wash);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 25%, var(--color-border));
+  border-radius: var(--radius-pill);
+  padding: 0.1rem 0.55rem;
+  font-size: 0.78rem;
+}
+
+.project-table-wrap {
+  margin-bottom: 1.5rem;
+}
+
+.projects-table th:first-child {
+  width: 100%;
+}
+
+.unfiled-heading {
+  margin: 0 0 0.65rem;
+  font-size: 0.95rem;
+}
+
+.unfiled-empty {
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.project-feedback {
+  min-height: 1.4em;
+  margin: 0.5rem 0 0.75rem;
+  font-size: 0.9rem;
+}
+
+.project-feedback[data-kind='error'],
+.project-dialog-feedback[data-kind='error'] {
+  color: #b42318;
+}
+
+.project-feedback[data-kind='success'],
+.project-dialog-feedback[data-kind='success'] {
+  color: #15803d;
+}
+
+.breadcrumbs {
+  display: flex;
+  gap: 0.45rem;
+  margin-bottom: 0.75rem;
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
+.project-heading {
+  margin-bottom: 0.25rem;
+}
+
+.project-menu .settings-menu-items button.link-button {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  padding: 0.45rem 0.65rem;
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+}
+
+.project-menu .settings-menu-items button.link-button:hover {
+  background: var(--color-paper-2);
+  color: var(--color-accent);
+}
+
+.project-menu .settings-menu-items button.danger-link,
+.project-menu .settings-menu-items button.danger-link:hover {
+  color: #b42318;
+}
+
+.project-menu .settings-menu-items button.danger-link:hover {
+  background: #fef3f2;
+}
+
+.project-empty-state {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.project-dialog {
+  width: min(420px, calc(100vw - 2rem));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: 0 16px 48px oklch(20% 0.01 55 / 0.2);
+  padding: 0;
+}
+
+.project-dialog::backdrop {
+  background: oklch(20% 0.01 55 / 0.35);
+}
+
+.project-dialog-form {
+  padding: 1.25rem;
+}
+
+.project-dialog-form h2 {
+  margin: 0 0 1rem;
+}
+
+.project-dialog-form select,
+.project-dialog-form input[type='text'] {
+  width: 100%;
+}
+
+.project-new-choice,
+.project-existing-choice {
+  margin-top: 0.75rem;
+}
+
+.project-new-fields label {
+  margin-top: 0.75rem;
+}
+
+.project-dialog-feedback {
+  min-height: 1.4em;
+  margin: 0.75rem 0;
+  font-size: 0.85rem;
+}
+
+.project-dialog-actions {
+  justify-content: flex-end;
+}
+
+@media (max-width: 640px) {
+  .site-header-inner {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .header-right {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    max-width: 100%;
+  }
+
+  .header-right > .muted {
+    overflow-wrap: anywhere;
+  }
+
+  .documents-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .team-actions {
+    flex-wrap: wrap;
+  }
 }
 `;

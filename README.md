@@ -6,6 +6,16 @@ Claude publishes HTML artifacts straight from a session via MCP. Teammates open 
 text, and leave comments — like a Google Doc, but for artifacts. Claude then pulls the open threads back through
 MCP, revises, and republishes; comments re-anchor onto the new version so the team can verify and resolve.
 
+## Projects
+
+Projects organize a team's artifacts without changing who can open or edit them. Each artifact is either assigned to one Project or **Unfiled**. Folder view shows accessible Projects as rows that open their artifact lists; Tag view keeps the flat artifact list and shows each assignment as a Project tag. The view choice is personal and is remembered in the browser.
+
+Project visibility follows artifact access. An empty Project is visible to all current team members; a populated Project appears only when the member can read at least one artifact in it, and its counts include only artifacts that member can read. Externally shared artifacts remain in **Shared with you** without exposing their owning team's Project metadata.
+
+Team members can create Projects and can rename or delete any Project they can access. Deleting a Project returns all of its artifacts to Unfiled while preserving their versions, comments, sharing, and URLs. Moving an artifact requires edit permission and changes only its current assignment.
+
+Agents can pass `project: "Website launch"` to `publish_artifact` to reuse an accessible Project or create it when the name is unused. Passing JSON `null` clears the assignment; omitting `project` on a revision preserves the assignment at publish time. The multipart `/api/publish` endpoint uses an absent `project` field to preserve and an empty field to clear. Project names use current-name semantics: publishing with an old name after a rename creates a new Project if that name is now unused. `list_projects` discovers visible destinations, while `move_artifact` moves to an existing Project name or Unfiled without publishing a new version.
+
 ## Private collaboration
 
 Choose **Private** in an artifact's Share panel to limit access to you and the people you invite. Enter email addresses (an optional leading `@` is accepted), choose Viewer or Editor for each, and send invitations. Each recipient signs in with their invited email and explicitly accepts the link. Invitations expire after seven days; the owner can resend, change roles, cancel invitations, or remove access in Share. Delivery failures appear individually so successful invitations need not be sent again.
@@ -80,8 +90,9 @@ production — the server refuses to start if `DEV_LOGIN_CODE` is set while `NOD
 
 ## Good to know
 
-- Connected agents get six MCP tools: `publish_artifact`, `get_artifact`, `get_comments`, `add_comment`,
-  `resolve_comment`, and `delete_artifact` — enough to publish a page, fetch it back, read the team's feedback, join
+- Connected agents get eight MCP tools: `publish_artifact`, `get_artifact`, `list_projects`, `move_artifact`,
+  `get_comments`, `add_comment`, `resolve_comment`, and `delete_artifact` — enough to publish and organize a page,
+  fetch it back, read the team's feedback, join
   the discussion (open a thread on a quoted passage or reply to one), close out addressed threads, and clean up.
 - Comments an agent posts through MCP are attributed to the token's owner with an "agent" badge naming the access
   token, so a review from Claude Code and one from a second reader model stay distinguishable in the sidebar and in

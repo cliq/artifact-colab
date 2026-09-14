@@ -13,6 +13,7 @@ import { initCompare } from './compare.js';
 import { FrameScaler } from './frameScale.js';
 import { loadFrame, persistFrameStorage } from './frameStorage.js';
 import { MENTION_CSS, MENTION_OPEN_ATTR, MentionPicker, renderMentionBody, type Mentionable, type MentionDTO } from './mentions.js';
+import { initMovePickers, showStoredProjectFeedback } from './projectPicker.js';
 import { initSidebarCollapse } from './sidebarCollapse.js';
 
 const POLL_INTERVAL_MS = 30_000;
@@ -28,6 +29,8 @@ interface ViewerData {
   userEmail: string;
   /** Set when the page compares an older version against the shown one. */
   compare: { versionNumber: number } | null;
+  project?: { id: string; name: string } | null;
+  canMoveProject: boolean;
   access: {
     effectiveRole: 'owner' | 'editor' | 'viewer';
     canComment: boolean;
@@ -586,6 +589,8 @@ function init(): void {
 
   injectStyles();
   initCollaboration(data);
+  showStoredProjectFeedback();
+  if (data.canMoveProject) initMovePickers({ csrfToken: data.csrfToken });
 
   const copyLinkButton = document.getElementById('copy-share-link') as HTMLButtonElement | null;
   copyLinkButton?.addEventListener('click', () => {

@@ -40,6 +40,7 @@ describe('db', () => {
         'document_invitations',
         'documents',
         'login_codes',
+        'projects',
         'sessions',
         'team_domains',
         'team_exclusions',

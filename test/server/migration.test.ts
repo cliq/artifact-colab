@@ -154,3 +154,57 @@ test('collaboration migration preserves existing visibility/defaults and creates
     rmSync(folder, { recursive: true, force: true });
   }
 });
+
+test('Projects migration leaves existing artifacts Unfiled and preserves their related data', () => {
+  const folder = mkdtempSync(join(tmpdir(), 'ac-projects-migration-'));
+  const path = join(folder, 'app.db');
+  const seed = new Database(path);
+  const journal = JSON.parse(readFileSync('drizzle/meta/_journal.json', 'utf8')) as { entries: { idx: number; tag: string; when: number }[] };
+  const prior = journal.entries.filter((entry) => entry.idx < 11);
+  try {
+    for (const entry of prior) {
+      for (const statement of readFileSync(`drizzle/${entry.tag}.sql`, 'utf8').split('--> statement-breakpoint')) seed.exec(statement);
+    }
+    seed.exec('CREATE TABLE __drizzle_migrations (id SERIAL PRIMARY KEY, hash text NOT NULL, created_at numeric)');
+    seed.prepare('INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)').run('pre-projects', prior.at(-1)!.when);
+    seed.exec("INSERT INTO users (id,email,created_at) VALUES ('owner','owner@example.com',0),('viewer','viewer@example.com',0)");
+    seed.exec("INSERT INTO teams (id,name,created_at) VALUES ('team','Team',0)");
+    seed.exec("INSERT INTO team_members (team_id,user_id,created_at) VALUES ('team','owner',0),('team','viewer',0)");
+    seed.exec("INSERT INTO documents (id,title,team_id,created_by,visibility,current_version_id,created_at) VALUES ('private','Private','team','owner','private','v1',0),('team-doc','Team','team','owner','team','v2',0)");
+    seed.exec("INSERT INTO versions (id,document_id,number,html,source_markdown,published_at,published_by) VALUES ('v1','private',1,'<p>private</p>','# private',1,'owner'),('v2','team-doc',1,'<p>team</p>',NULL,2,'owner')");
+    seed.exec("INSERT INTO document_collaborators (document_id,user_id,role,granted_by,created_at,updated_at) VALUES ('private','viewer','viewer','owner',0,0)");
+    seed.exec("INSERT INTO comments (id,document_id,author_id,body,quoted_text,anchor,status,created_version_id,created_at) VALUES ('comment','private','viewer','kept','','null','open','v1',3)");
+    seed.exec("INSERT INTO watches (document_id,user_id,state,last_notified_at,created_at,updated_at) VALUES ('private','viewer','watching',0,0,0)");
+    seed.close();
+
+    const migrated = openDb(path);
+    try {
+      expect(migrated.sqlite.prepare('SELECT id, project_id FROM documents ORDER BY id').all()).toEqual([
+        { id: 'private', project_id: null },
+        { id: 'team-doc', project_id: null },
+      ]);
+      expect(migrated.sqlite.prepare('SELECT id, visibility, created_by, current_version_id FROM documents ORDER BY id').all()).toEqual([
+        { id: 'private', visibility: 'private', created_by: 'owner', current_version_id: 'v1' },
+        { id: 'team-doc', visibility: 'team', created_by: 'owner', current_version_id: 'v2' },
+      ]);
+      expect(migrated.sqlite.prepare('SELECT id, source_markdown, published_by FROM versions ORDER BY id').all()).toEqual([
+        { id: 'v1', source_markdown: '# private', published_by: 'owner' },
+        { id: 'v2', source_markdown: null, published_by: 'owner' },
+      ]);
+      expect(migrated.sqlite.prepare('SELECT document_id, user_id, role FROM document_collaborators').all()).toEqual([
+        { document_id: 'private', user_id: 'viewer', role: 'viewer' },
+      ]);
+      expect(migrated.sqlite.prepare('SELECT id, body FROM comments').all()).toEqual([{ id: 'comment', body: 'kept' }]);
+      expect(migrated.sqlite.prepare('SELECT document_id, user_id, state FROM watches').all()).toEqual([
+        { document_id: 'private', user_id: 'viewer', state: 'watching' },
+      ]);
+      expect(migrated.sqlite.prepare('SELECT * FROM projects').all()).toEqual([]);
+      expect(migrated.sqlite.pragma('foreign_key_check')).toEqual([]);
+    } finally {
+      migrated.sqlite.close();
+    }
+  } finally {
+    if (seed.open) seed.close();
+    rmSync(folder, { recursive: true, force: true });
+  }
+});

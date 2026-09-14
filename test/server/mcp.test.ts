@@ -13,7 +13,7 @@ import { createApp } from '../../src/server/app.js';
 import { createToken, getOrCreateUser } from '../../src/server/auth.js';
 import type { Config } from '../../src/server/config.js';
 import type { AppEnv } from '../../src/server/context.js';
-import { assets, comments, openDb, tokens, versions, type DB } from '../../src/server/db/index.js';
+import { assets, comments, documentCollaborators, openDb, tokens, versions, type DB } from '../../src/server/db/index.js';
 import { indexVersionHtml } from '../../src/server/services/anchorStates.js';
 import { baseTestConfig, seedTeamWithDomain } from './teamTestUtils.js';
 import { inlineAssets } from '../../src/server/services/assets.js';
@@ -81,8 +81,8 @@ describe('mcp', () => {
     return payload.result;
   }
 
-  async function callTool(name: string, args: unknown): Promise<any> {
-    const res = await rpc('tools/call', { name, arguments: args });
+  async function callTool(name: string, args: unknown, token = pat): Promise<any> {
+    const res = await rpc('tools/call', { name, arguments: args }, token);
     return rpcResult(res);
   }
 
@@ -107,10 +107,19 @@ describe('mcp', () => {
     expect(lastUsed()).not.toBeNull();
   });
 
-  test('lists the six tools', async () => {
+  test('lists the eight tools', async () => {
     const result = await rpcResult(await rpc('tools/list', {}));
     const names = result.tools.map((t: any) => t.name).sort();
-    expect(names).toEqual(['add_comment', 'delete_artifact', 'get_artifact', 'get_comments', 'publish_artifact', 'resolve_comment']);
+    expect(names).toEqual([
+      'add_comment',
+      'delete_artifact',
+      'get_artifact',
+      'get_comments',
+      'list_projects',
+      'move_artifact',
+      'publish_artifact',
+      'resolve_comment',
+    ]);
   });
 
   let documentId: string;
@@ -122,6 +131,86 @@ describe('mcp', () => {
     expect(text).toContain('http://colab.example.com/d/');
     documentId = text.match(/document_id: (\w+)/)![1]!;
     expect(documentId).toHaveLength(10);
+    expect(text).toContain('project: Unfiled');
+    expect(text).toContain('project_created: false');
+  });
+
+  test('publishes into Projects, lists them, and moves without creating a version', async () => {
+    const published = await callTool('publish_artifact', {
+      title: 'Launch brief',
+      html: '<h1>Launch</h1>',
+      project: '  Website   launch ',
+    });
+    expect(published.isError, published.content[0].text).toBeFalsy();
+    const publishText = published.content[0].text as string;
+    expect(publishText).toContain('project: Website launch');
+    expect(publishText).toContain('project_created: true');
+    const projectDocId = publishText.match(/document_id: (\w+)/)![1]!;
+
+    const listed = await callTool('list_projects', {});
+    const payload = JSON.parse(listed.content[0].text);
+    expect(payload.projects).toEqual([
+      expect.objectContaining({
+        name: 'Website launch',
+        url: expect.stringMatching(/^http:\/\/colab\.example\.com\/p\//),
+        artifact_count: 1,
+        open_comment_count: 0,
+      }),
+    ]);
+
+    const fetched = await callTool('get_artifact', { document_id: projectDocId });
+    expect(fetched.content[0].text).toContain('Project: Website launch (http://colab.example.com/p/');
+
+    const cleared = await callTool('move_artifact', { document_id: projectDocId, project: null });
+    expect(cleared.isError, cleared.content[0].text).toBeFalsy();
+    expect(cleared.content[0].text).toContain('Unfiled');
+    expect((await callTool('get_artifact', { document_id: projectDocId })).content[0].text).toContain('Project: Unfiled');
+
+    const restored = await callTool('move_artifact', { document_id: projectDocId, project: 'website LAUNCH' });
+    expect(restored.isError, restored.content[0].text).toBeFalsy();
+    expect(restored.content[0].text).toContain('Website launch');
+    const versionsAfterMoves = db.select().from(versions).where(eq(versions.documentId, projectDocId)).all();
+    expect(versionsAfterMoves).toHaveLength(1);
+
+    const unknown = await callTool('move_artifact', { document_id: projectDocId, project: 'Unknown Project' });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.content[0].text).toContain('Project not found');
+
+    const mallory = getOrCreateUser(db, 'mallory@evil.com', new Date());
+    const malloryPat = createToken(db, mallory.id, 'team-evil', 'evil', new Date()).plaintext;
+    expect(JSON.parse((await callTool('list_projects', {}, malloryPat)).content[0].text).projects).toEqual([]);
+    const crossTeamMove = await callTool('move_artifact', { document_id: projectDocId, project: null }, malloryPat);
+    expect(crossTeamMove.isError).toBe(true);
+    expect(crossTeamMove.content[0].text).toContain('Artifact not found');
+  });
+
+  test('move_artifact rejects a private Viewer even when the Project is visible', async () => {
+    const published = await callTool('publish_artifact', {
+      title: 'Private brief',
+      html: '<p>private</p>',
+      visibility: 'private',
+      project: 'Private work',
+    });
+    const privateDocId = (published.content[0].text as string).match(/document_id: (\w+)/)![1]!;
+    const alice = getOrCreateUser(db, 'alice@example.com', new Date());
+    const bob = getOrCreateUser(db, 'bob@example.com', new Date());
+    db.insert(documentCollaborators)
+      .values({
+        documentId: privateDocId,
+        userId: bob.id,
+        role: 'viewer',
+        grantedBy: alice.id,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .run();
+    const bobPat = createToken(db, bob.id, 'team-example', 'viewer', new Date()).plaintext;
+    const visible = JSON.parse((await callTool('list_projects', {}, bobPat)).content[0].text).projects;
+    expect(visible.map((project: any) => project.name)).toContain('Private work');
+
+    const refused = await callTool('move_artifact', { document_id: privateDocId, project: null }, bobPat);
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toContain('cannot move');
   });
 
   test('publish_artifact rejects oversized html', async () => {

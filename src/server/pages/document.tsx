@@ -41,6 +41,10 @@ export interface DocumentPageProps {
   shareUrl: string;
   /** Server-authoritative capabilities for this user and artifact. */
   access: DocumentAccess;
+  /** Authorized team Project metadata; omitted for outsiders. */
+  project?: { id: string; name: string } | null;
+  /** Team members with effective publishing permission may move this artifact. */
+  canMoveProject: boolean;
 }
 
 const viewerCss = `
@@ -66,6 +70,7 @@ main { flex: 1 1 auto; min-height: 0; max-width: none; width: 100%; margin: 0; p
 .viewer-toolbar .watch-btn:hover { background: var(--color-bg); color: var(--color-accent); }
 .viewer-toolbar .watch-btn.watching { color: var(--color-accent); }
 .viewer-toolbar .shared-note { font-size: 12px; color: var(--color-muted); background: var(--color-bg); border-radius: 4px; padding: 2px 8px; }
+.viewer-toolbar .project-feedback { margin: 0; font-size: 12px; }
 .version-menu summary { font-family: var(--font-mono); font-weight: 600; }
 .version-panel { min-width: 260px; padding: 6px; }
 .version-option { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 8px; color: var(--color-text); }
@@ -220,6 +225,8 @@ export const DocumentPage: FC<DocumentPageProps> = ({
   isMember,
   shareUrl,
   access,
+  project,
+  canMoveProject,
 }) => {
   const backToUrl = viewerUrl(document, shownVersion, compareVersion);
   const isCurrent = shownVersion.id === document.currentVersionId;
@@ -245,6 +252,8 @@ export const DocumentPage: FC<DocumentPageProps> = ({
     csrfToken,
     userEmail: user.email,
     compare: compareVersion ? { versionNumber: compareVersion.number } : null,
+    project,
+    canMoveProject,
     access: {
       effectiveRole: access.effectiveRole,
       canComment: access.canComment,
@@ -272,6 +281,7 @@ export const DocumentPage: FC<DocumentPageProps> = ({
               !isCurrent && <span class="stale-note">viewing an old version — commenting disabled</span>
             )}
             <div class="toolbar-spacer"></div>
+            <span id="project-feedback" class="project-feedback" aria-live="polite"></span>
             {/* A menu rather than a <select>: the closed state shows only the
                 version number while each row carries the full timestamp and
                 publisher (a native select shows the same text in both places). */}
@@ -428,8 +438,16 @@ export const DocumentPage: FC<DocumentPageProps> = ({
               </button>
             </form>
             <details class="settings-menu export-menu">
-              <summary>{access.canDelete || canDelete ? 'More' : 'Export'}</summary>
+              <summary>{access.canDelete || canDelete || canMoveProject ? 'More' : 'Export'}</summary>
               <div class="settings-menu-items">
+                {canMoveProject && <button
+                  type="button"
+                  class="link-button"
+                  data-move-to-project
+                  data-document-id={document.id}
+                  data-team-id={document.teamId}
+                  data-project-name={project?.name ?? ''}
+                >Move to project</button>}
                 <a href={`/api/docs/${document.id}/export.md`} download={`${document.id}-comments.md`}>
                   Export comments as Markdown…
                 </a>

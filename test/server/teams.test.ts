@@ -12,6 +12,7 @@ import {
   comments,
   documents,
   openDb,
+  projects,
   teamInvites,
   teamMembers,
   tokens,
@@ -258,11 +259,13 @@ describe('member removal side effects', () => {
 });
 
 describe('deleteTeamCascade', () => {
-  test('leaves no orphaned documents, versions, watches, tokens, or invites', () => {
+  test('leaves no orphaned documents, Projects, versions, watches, tokens, or invites', () => {
     const db = freshDb();
     seedTeamWithDomain(db, 'team-1', 'cliq.dev');
     const owner = getOrCreateUser(db, 'owner@cliq.dev', NOW);
     seedDocument(db, 'doc-1', 'team-1', owner.id);
+    db.insert(projects).values({ id: 'project-1', teamId: 'team-1', name: 'Plan', nameKey: 'plan', createdBy: owner.id, createdAt: NOW, updatedAt: NOW }).run();
+    db.update(documents).set({ projectId: 'project-1' }).run();
     createToken(db, owner.id, 'team-1', 'x', NOW);
     setWatching(db, 'doc-1', owner.id, true, NOW);
     inviteMember(db, 'team-1', 'pending@gmail.com', 'member', owner, NOW);
@@ -270,6 +273,7 @@ describe('deleteTeamCascade', () => {
     deleteTeamCascade(db, 'team-1');
 
     expect(db.select().from(documents).all()).toHaveLength(0);
+    expect(db.select().from(projects).all()).toHaveLength(0);
     expect(db.select().from(versions).all()).toHaveLength(0);
     expect(db.select().from(watches).all()).toHaveLength(0);
     expect(db.select().from(tokens).all()).toHaveLength(0);

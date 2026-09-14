@@ -17,10 +17,12 @@ import { DocumentDeletePage, DocumentPage } from '../pages/document.js';
 import { safeLocalPath } from '../safeRedirect.js';
 import { deleteDocumentCascade, isDocumentVisibility, setDocumentVisibility } from '../services/documents.js';
 import { resolveDocumentAccess } from '../services/access.js';
+import { getProjectForUser } from '../services/projects.js';
 import { isWatching, setWatching } from '../services/watches.js';
 import { findDocumentForUser, findDocumentForViewer } from './api.js';
 
 let viewerJsCache: string | null = null;
+let projectsJsCache: string | null = null;
 
 function getViewerJs(): string {
   if (viewerJsCache !== null) return viewerJsCache;
@@ -60,6 +62,14 @@ documentRoutes.get('/static/viewer.js', (c) =>
   }),
 );
 
+documentRoutes.get('/static/projects.js', (c) => {
+  if (projectsJsCache === null) {
+    try { projectsJsCache = readFileSync(join(process.cwd(), 'dist', 'projects.js'), 'utf8'); }
+    catch { return c.text('Projects client bundle not built', 503); }
+  }
+  return c.body(projectsJsCache, 200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-cache' });
+});
+
 documentRoutes.get('/d/:slug', (c) => {
   const user = c.get('user');
   const db = c.get('db');
@@ -69,6 +79,8 @@ documentRoutes.get('/d/:slug', (c) => {
   const access = findDocumentForViewer(db, slug, user.id);
   if (!access) return c.notFound();
   const doc = access.document;
+  c.header('Cache-Control', 'private, no-store');
+  const project = access.isMember && doc.projectId ? getProjectForUser(db, doc.projectId, user.id) : undefined;
 
   const versionRows = db
     .select({
@@ -125,6 +137,8 @@ documentRoutes.get('/d/:slug', (c) => {
       canDelete={access.canDelete}
       access={access}
       isMember={access.isMember}
+      project={access.isMember ? (project ? { id: project.id, name: project.name } : null) : undefined}
+      canMoveProject={access.isMember && access.canPublish}
       shareUrl={`${config.baseUrl}/d/${doc.id}`}
     />,
   );

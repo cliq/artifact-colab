@@ -8,16 +8,18 @@
  * `.js`-suffixed relative imports regardless of source extension.
  */
 
-import { count, eq, and, isNull, isNotNull, desc, or } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
 
 import { createToken, getSessionUser, revokeToken } from '../auth.js';
 import type { AppEnv } from '../context.js';
 import type { DB } from '../db/index.js';
-import { comments, documentCollaborators, documents, teamMembers, tokens, users, versions, watches, type Document } from '../db/schema.js';
+import { teamMembers, tokens, users } from '../db/schema.js';
 import { csrfTokenFor, sessionAuth } from '../middleware.js';
-import { readableDocumentCondition, resolveDocumentAccess } from '../services/access.js';
+import { documentRowsForTeam, sharedWithUserRows, type TeamDocumentsGroup } from '../services/documentLists.js';
+import { visibleProjectsForTeam } from '../services/projects.js';
+import { documentsView } from '../documentsView.js';
 import { gravatarUrl } from '../services/gravatar.js';
 import {
   FREE_EMAIL_DOMAINS,
@@ -28,69 +30,12 @@ import {
   getUserTeams,
   isInstanceAdmin,
 } from '../services/teams.js';
-import { DocumentsPage, type DocumentListRow, type TeamDocumentsGroup } from '../pages/documents.js';
+import { DocumentsPage } from '../pages/documents.js';
 import { ProfilePage } from '../pages/profile.js';
 import { SigninPage } from '../pages/signin.js';
 import { TokensPage, type TokenTeamOption } from '../pages/tokens.js';
 import { safeLocalPath } from '../safeRedirect.js';
 import { appCss } from '../static/appCss.js';
-
-function documentRow(db: DB, doc: Document, userId: string): DocumentListRow {
-  const [{ value: versionCount }] = db.select({ value: count() }).from(versions).where(eq(versions.documentId, doc.id)).all();
-
-  const [{ value: openCommentCount }] = db
-    .select({ value: count() })
-    .from(comments)
-    .where(and(eq(comments.documentId, doc.id), eq(comments.status, 'open'), isNull(comments.parentId)))
-    .all();
-
-  const [latest] = db
-    .select({ publishedAt: versions.publishedAt })
-    .from(versions)
-    .where(eq(versions.documentId, doc.id))
-    .orderBy(desc(versions.number))
-    .limit(1)
-    .all();
-
-  const [owner] = db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, doc.createdBy)).all();
-
-  return {
-    id: doc.id,
-    title: doc.title,
-    effectiveRole: resolveDocumentAccess(db, doc.id, userId)?.effectiveRole,
-    ownerName: owner?.name ?? owner?.email ?? '—',
-    ownerEmail: owner?.email ?? null,
-    visibility: doc.visibility as DocumentListRow['visibility'],
-    versionCount,
-    openCommentCount,
-    lastPublishedAt: latest?.publishedAt ?? null,
-  };
-}
-
-/** Team lists use the same read policy as direct artifact access. */
-function documentRowsForTeam(db: DB, teamId: string, userId: string): DocumentListRow[] {
-  return db
-    .select()
-    .from(documents)
-    .where(and(eq(documents.teamId, teamId), readableDocumentCondition(userId)))
-    .orderBy(desc(documents.createdAt))
-    .all()
-    .map((doc) => documentRow(db, doc, userId));
-}
-
-/** Accepted external grants are discoverable independently of watches; public watches retain links. */
-function sharedWithUserRows(db: DB, userId: string): DocumentListRow[] {
-  return db
-    .select({ document: documents })
-    .from(documents)
-    .leftJoin(watches, and(eq(watches.documentId, documents.id), eq(watches.userId, userId)))
-    .leftJoin(documentCollaborators, and(eq(documentCollaborators.documentId, documents.id), eq(documentCollaborators.userId, userId)))
-    .leftJoin(teamMembers, and(eq(teamMembers.teamId, documents.teamId), eq(teamMembers.userId, userId)))
-    .where(and(readableDocumentCondition(userId), isNull(teamMembers.userId), or(isNotNull(documentCollaborators.userId), and(eq(documents.visibility, 'public'), isNotNull(watches.userId)))))
-    .orderBy(desc(documents.createdAt))
-    .all()
-    .map((row) => documentRow(db, row.document, userId));
-}
 
 export const pageRoutes = new Hono<AppEnv>();
 
@@ -110,12 +55,18 @@ pageRoutes.get('/', sessionAuth({ redirect: true }), (c) => {
   const config = c.get('config');
   const csrfToken = csrfTokenFor(c);
 
-  const groups: TeamDocumentsGroup[] = getUserTeams(db, user.id).map((membership) => ({
-    teamId: membership.team.id,
-    teamName: membership.team.name,
-    isTeamAdmin: membership.role === 'admin',
-    documents: documentRowsForTeam(db, membership.team.id, user.id),
-  }));
+  c.header('Cache-Control', 'private, no-store');
+  const view = documentsView(c);
+  const groups: TeamDocumentsGroup[] = getUserTeams(db, user.id).map((membership) => {
+    const projects = visibleProjectsForTeam(db, membership.team.id, user.id);
+    return {
+      teamId: membership.team.id,
+      teamName: membership.team.name,
+      isTeamAdmin: membership.role === 'admin',
+      projects,
+      documents: documentRowsForTeam(db, membership.team.id, user.id, projects),
+    };
+  });
 
   const shared = sharedWithUserRows(db, user.id);
   const wizard =
@@ -126,6 +77,7 @@ pageRoutes.get('/', sessionAuth({ redirect: true }), (c) => {
       user={user}
       csrfToken={csrfToken}
       groups={groups}
+      view={view}
       shared={shared}
       isInstanceAdmin={isInstanceAdmin(user, config)}
       wizard={wizard}
@@ -147,6 +99,7 @@ pageRoutes.post('/teams', async (c) => {
   const sessionToken = getCookie(c, 'session');
   const user = sessionToken ? getSessionUser(db, sessionToken, new Date()) : null;
   if (!config.selfSignup || !user) return c.notFound();
+  c.set('user', user);
   if (getUserTeams(db, user.id).length > 0) return c.notFound();
 
   const isForm = !(c.req.header('content-type') ?? '').includes('application/json');
@@ -167,6 +120,7 @@ pageRoutes.post('/teams', async (c) => {
         user={user}
         csrfToken={csrfTokenFor(c)}
         groups={[]}
+        view={documentsView(c)}
         shared={sharedWithUserRows(db, user.id)}
         isInstanceAdmin={isInstanceAdmin(user, config)}
         wizard={{ claimableDomain: claimableDomain(db, user.email), error }}

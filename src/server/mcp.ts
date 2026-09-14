@@ -1,7 +1,7 @@
 /**
  * MCP endpoint (Streamable HTTP, stateless) exposing publish_artifact,
- * get_artifact, get_comments, add_comment, resolve_comment, and
- * delete_artifact. Auth is a personal access token via `Authorization:
+ * get_artifact, Project discovery and moves, comments, and deletion. Auth is
+ * a personal access token via `Authorization:
  * Bearer` — the bearerAuth middleware resolves the user and token, and both
  * ride into the per-request McpServer instance through `authInfo.extra`
  * (createMcpHandler calls the factory once per request). Comments posted
@@ -35,6 +35,7 @@ import { indexVersionHtml } from './services/anchorStates.js';
 import { createReply, createThreadComment, locateQuote, type CommentVia } from './services/comments.js';
 import { deleteDocumentCascade } from './services/documents.js';
 import { publishArtifact } from './services/publish.js';
+import { getProjectForUser, moveArtifact, ProjectError, visibleProjectsForTeam } from './services/projects.js';
 
 import { and, eq } from 'drizzle-orm';
 
@@ -67,12 +68,14 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         'and hands your Markdown source back from get_artifact when you revise. ' +
         'Without document_id, creates a new document and returns its shareable URL. ' +
         'With document_id, appends a new version to that document; existing comments re-anchor onto the new version where their quoted text still exists. ' +
+        'Pass project by name to assign the artifact, creating that Project if the name is unused; pass null for Unfiled. ' +
+        'Omitting project leaves a revision in its current Project. Project names are current: after a rename, the old unused name creates a new Project. ' +
         'Binary files (screenshots, images) go in `assets` instead of being inlined: reference each one from the HTML by its exact name ' +
         '(e.g. <img src="shots/bar.png">, or ![alt](shots/bar.png) in Markdown) and the server substitutes it when rendering. ' +
         'For files too large to inline in a tool call, publish from disk instead — POST multipart/form-data to ' +
         `${config.baseUrl}/api/publish with the same bearer token: curl -X POST ${config.baseUrl}/api/publish ` +
         '-H "Authorization: Bearer $TOKEN" -F title="..." -F html=@page.html -F "assets=@bar.png;filename=shots/bar.png" ' +
-        '(pass -F markdown=@page.md instead of the html part to publish Markdown; document_id and visibility are optional form fields; ' +
+        '(pass -F markdown=@page.md instead of the html part to publish Markdown; document_id, visibility, and project are optional form fields; ' +
         'each asset filename is its reference name; $TOKEN is the same token ' +
         'this MCP server is configured with, e.g. in the Authorization header of its entry in your MCP config).',
       inputSchema: z.object({
@@ -86,6 +89,11 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
           .describe(
             "Who can open the URL: 'team' (members only, the default for new documents), 'public' (anyone signed in on the instance who has the link), or 'private' (the owner and accepted collaborators; only the owner manages private access). Omitted on a republish keeps the document's current setting",
           ),
+        project: z
+          .string()
+          .nullable()
+          .optional()
+          .describe('Project name to resolve or create; null means Unfiled; omitted preserves the current assignment when revising'),
         assets: z
           .array(
             z.object({
@@ -98,7 +106,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
           .describe('Files referenced by the HTML; re-uploading a name replaces it for the whole document'),
       }),
     },
-    async ({ title, html, markdown, document_id, visibility, assets: incomingAssets }) => {
+    async ({ title, html, markdown, document_id, visibility, project, assets: incomingAssets }) => {
       if (!used()) return toolError('token is no longer authorized');
       const decodedAssets: IncomingAsset[] = [];
       for (const a of incomingAssets ?? []) {
@@ -113,6 +121,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         markdown,
         documentId: document_id,
         visibility,
+        project,
         assets: decodedAssets,
       });
       if (!outcome.ok) return toolError(outcome.error);
@@ -120,6 +129,8 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       const lines = [
         `Published "${title}" as version ${outcome.versionNumber}: ${outcome.url}`,
         `document_id: ${outcome.documentId}`,
+        `project: ${outcome.project ?? 'Unfiled'}`,
+        `project_created: ${outcome.projectCreated}`,
       ];
       if (visibility === 'public') {
         lines.push('The URL is shareable with anyone signed in on this instance.');
@@ -141,6 +152,52 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
   // curl command against /api/docs/:slug/raw instead — the server decides,
   // so the client never has to guess whether an artifact is "too big".
   const INLINE_HTML_LIMIT = 50 * 1024;
+
+  server.registerTool(
+    'list_projects',
+    {
+      title: 'List projects',
+      description:
+        "List the Projects visible to this token's user in its team, ordered by name. Counts include only artifacts that user can read.",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      if (!used()) return toolError('token is no longer authorized');
+      const projectRows = visibleProjectsForTeam(db, teamId, user.id).map((project) => ({
+        name: project.name,
+        url: `${config.baseUrl}/p/${project.id}`,
+        artifact_count: project.artifactCount,
+        open_comment_count: project.openCommentCount,
+        last_published_at: project.lastPublishedAt?.toISOString() ?? null,
+      }));
+      return { content: [{ type: 'text', text: JSON.stringify({ projects: projectRows }, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
+    'move_artifact',
+    {
+      title: 'Move artifact',
+      description:
+        'Move an existing editable artifact to an existing visible Project by its current name, or pass null for Unfiled. ' +
+        'This changes only its current organization; it does not publish a version. Use list_projects to discover current names.',
+      inputSchema: z.object({
+        document_id: z.string().describe('Artifact document ID'),
+        project: z.string().nullable().describe('Existing Project name, or null for Unfiled'),
+      }),
+    },
+    async ({ document_id, project }) => {
+      if (!used()) return toolError('token is no longer authorized');
+      try {
+        const saved = moveArtifact(db, document_id, teamId, user.id, project);
+        const destination = saved ? `"${saved.name}" (${config.baseUrl}/p/${saved.id})` : 'Unfiled';
+        return { content: [{ type: 'text', text: `Moved artifact ${document_id} to ${destination}.` }] };
+      } catch (error) {
+        if (error instanceof ProjectError) return toolError(error.message);
+        throw error;
+      }
+    },
+  );
 
   server.registerTool(
     'get_artifact',
@@ -172,6 +229,8 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       const source = row.sourceMarkdown ?? row.html;
       const assetNames = assetsForDocument(db, doc.id).map((a) => a.name);
       const headerLines = [`"${doc.title}" — version ${row.number} of ${doc.id}${isMarkdown ? ' (published as Markdown)' : ''}`];
+      const project = doc.projectId === null ? undefined : getProjectForUser(db, doc.projectId, user.id);
+      headerLines.push(project ? `Project: ${project.name} (${config.baseUrl}/p/${project.id})` : 'Project: Unfiled');
       if (doc.visibility === 'public') {
         headerLines.push('Visibility: public (anyone signed in on the instance can open the URL).');
       }

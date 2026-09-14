@@ -17,6 +17,7 @@ import { resolveDocumentAccess, mentionableUsers, type DocumentAccess } from '..
 import { assetsForDocument, relinkAssets, stripBaseHref } from '../services/assets.js';
 import { createReply, createThreadComment } from '../services/comments.js';
 import { gravatarUrl } from '../services/gravatar.js';
+import { getProjectForUser } from '../services/projects.js';
 import { resolveMentions } from '../services/watches.js';
 import { buildZip, type ZipEntry } from '../services/zip.js';
 
@@ -290,8 +291,11 @@ export const apiRoutes = new Hono<AppEnv>();
 apiRoutes.get('/api/docs/:slug', (c) => {
   const db = c.get('db');
   const user = c.get('user');
-  const doc = findDocumentForViewer(db, c.req.param('slug'), user.id)?.document;
-  if (!doc) return c.json({ error: 'not found' }, 404);
+  const access = findDocumentForViewer(db, c.req.param('slug'), user.id);
+  if (!access) return c.json({ error: 'not found' }, 404);
+  const doc = access.document;
+  c.header('Cache-Control', 'private, no-store');
+  const project = access.isMember && doc.projectId ? getProjectForUser(db, doc.projectId, user.id) : undefined;
 
   const versionRows = db.select().from(versions).where(eq(versions.documentId, doc.id)).orderBy(asc(versions.number)).all();
 
@@ -303,8 +307,15 @@ apiRoutes.get('/api/docs/:slug', (c) => {
       visibility: doc.visibility,
       createdAt: doc.createdAt,
       currentVersionId: doc.currentVersionId,
+      ...(access.isMember ? { project: project ? { id: project.id, name: project.name, url: `/p/${project.id}` } : null } : {}),
     },
-    access: resolveDocumentAccess(db, doc.id, user.id),
+    access: {
+      isMember: access.isMember, ownerActive: access.ownerActive, isOwner: access.isOwner,
+      effectiveRole: access.effectiveRole, canRead: access.canRead, canComment: access.canComment,
+      canPublish: access.canPublish, canRequestEdit: access.canRequestEdit,
+      canManageAccess: access.canManageAccess, canChangeVisibility: access.canChangeVisibility,
+      canDelete: access.canDelete, canMoveProject: access.isMember && access.canPublish,
+    },
     versions: versionRows.map((version) => ({ id: version.id, number: version.number, publishedAt: version.publishedAt })),
   });
 });
