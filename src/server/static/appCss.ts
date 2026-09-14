@@ -851,8 +851,121 @@ select {
   margin-bottom: 1.5rem;
 }
 
-.projects-table th:first-child {
+.projects-table > thead > tr > th:first-child {
   width: 100%;
+}
+
+.table-sort,
+.project-toggle {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  justify-content: flex-start;
+}
+
+.table-sort {
+  text-transform: inherit;
+  letter-spacing: inherit;
+  white-space: nowrap;
+}
+
+.table-sort:hover,
+.project-toggle:hover {
+  background: transparent;
+  color: var(--color-accent);
+  transform: none;
+}
+
+.table-sort:focus-visible,
+.project-toggle:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 4px;
+}
+
+.sort-indicator {
+  width: 1em;
+  opacity: 0.5;
+}
+
+th[aria-sort='ascending'] .sort-indicator,
+th[aria-sort='descending'] .sort-indicator {
+  opacity: 1;
+  color: var(--color-accent);
+}
+
+.project-row {
+  cursor: pointer;
+  scroll-margin-top: 1rem;
+}
+
+.project-row:hover,
+.project-row:has([aria-expanded='true']) {
+  background: var(--color-paper-2);
+}
+
+.project-toggle {
+  width: 100%;
+  color: var(--color-accent);
+  gap: 0.65rem;
+}
+
+.project-chevron {
+  flex: none;
+  width: 0.45rem;
+  height: 0.45rem;
+  margin-right: 0.2rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--dur-short) var(--ease-out);
+}
+
+.project-toggle[aria-expanded='true'] .project-chevron {
+  transform: rotate(45deg);
+}
+
+.project-contents > td {
+  padding: 0.75rem 1rem 1.25rem 2rem;
+  background: var(--color-paper-2);
+}
+
+.project-row-actions {
+  width: 1%;
+  padding: 0.4rem 0.75rem;
+  cursor: default;
+}
+
+.project-settings-button {
+  width: 2.25rem;
+  height: 1.75rem;
+  padding: 0;
+}
+
+.project-settings-button:hover {
+  transform: none;
+}
+
+.project-settings-button[aria-expanded='true'] {
+  background: var(--color-paper-2);
+}
+
+.project-settings-button:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.project-actions-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  max-width: calc(100vw - 1rem);
+}
+
+.project-actions-menu:not(:popover-open) {
+  display: none;
 }
 
 .unfiled-heading {
@@ -969,6 +1082,7 @@ select {
 
 .project-dialog-actions {
   justify-content: flex-end;
+  margin-top: 1rem;
 }
 
 @media (max-width: 640px) {

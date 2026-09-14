@@ -51,16 +51,52 @@ test.describe('Projects', () => {
 
   test('Folder view hides inaccessible Projects and counts only readable artifacts', async () => {
     await member.goto('/?view=folders');
-    await expect(member.getByRole('link', { name: 'Website launch', exact: true })).toBeVisible();
-    await expect(member.getByRole('link', { name: 'Confidential work', exact: true })).toHaveCount(0);
+    const toggle = member.getByRole('button', { name: 'Website launch', exact: true });
+    await expect(toggle).toBeVisible();
+    await expect(member.getByRole('button', { name: 'Confidential work', exact: true })).toHaveCount(0);
     const row = member.locator('.project-row', { hasText: 'Website launch' });
     await expect(row.locator('td').nth(1)).toHaveText('1');
-    await member.getByRole('link', { name: 'Website launch', exact: true }).click();
+    await expect(member.getByRole('link', { name: 'Launch brief', exact: true })).toBeHidden();
+    await member.evaluate(() => { document.body.dataset.inlineCheck = 'same-page'; });
+    await toggle.focus();
+    await member.keyboard.press('Enter');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(new URL(member.url()).pathname).toBe('/');
+    await expect(member.locator('body')).toHaveAttribute('data-inline-check', 'same-page');
     await expect(member.getByRole('link', { name: 'Launch brief', exact: true })).toBeVisible();
     await expect(member.getByRole('link', { name: 'Private launch budget', exact: true })).toHaveCount(0);
+    await member.reload();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await toggle.click();
+    await expect(member.getByRole('link', { name: 'Launch brief', exact: true })).toBeHidden();
     await owner.goto('/?view=folders');
-    await expect(owner.getByRole('link', { name: 'Confidential work', exact: true })).toBeVisible();
+    await expect(owner.getByRole('button', { name: 'Confidential work', exact: true })).toBeVisible();
+    await owner.getByRole('button', { name: 'Website launch', exact: true }).click();
+    await owner.getByRole('button', { name: 'Confidential work', exact: true }).click();
+    await expect(owner.getByRole('link', { name: 'Launch brief', exact: true })).toBeVisible();
+    await expect(owner.getByRole('link', { name: 'Secret acquisition', exact: true })).toBeVisible();
     await owner.screenshot({ path: 'test-results/projects-folders.png', fullPage: true });
+  });
+
+  test('settings on the last collapsed row support keyboard and Escape without opening the folder', async () => {
+    const folder = owner.getByRole('button', { name: 'Website launch', exact: true });
+    await folder.click();
+    await expect(folder).toHaveAttribute('aria-expanded', 'false');
+    const settings = owner.getByRole('button', { name: 'Project settings: Website launch', exact: true });
+    await settings.focus();
+    await owner.keyboard.press('Enter');
+    await expect(settings).toHaveAttribute('aria-expanded', 'true');
+    await expect(folder).toHaveAttribute('aria-expanded', 'false');
+    const menu = owner.locator(`#project-menu-${launchId}`);
+    await expect(menu.getByRole('button', { name: 'Rename project', exact: true })).toBeVisible();
+    await owner.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+    await expect(settings).toBeFocused();
+    await settings.click();
+    await menu.getByRole('button', { name: 'Rename project', exact: true }).click();
+    await expect(owner.locator('dialog[open]').getByLabel('Project name')).toHaveValue('Website launch');
+    await owner.locator('dialog[open]').getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(folder).toHaveAttribute('aria-expanded', 'false');
   });
 
   test('Tag view keeps a flat list, links to Projects, and survives reload', async () => {
@@ -72,8 +108,10 @@ test.describe('Projects', () => {
     await expect(owner.getByRole('link', { name: 'Tags', exact: true })).toHaveAttribute('aria-current', 'page');
     await owner.screenshot({ path: 'test-results/projects-tags.png', fullPage: true });
     await owner.locator('.project-tag', { hasText: 'Website launch' }).first().click();
-    await expect(owner.locator('main h1')).toHaveText('Website launch');
-    await owner.getByRole('link', { name: 'Documents', exact: true }).click();
+    await expect(owner.getByRole('button', { name: 'Website launch', exact: true })).toHaveAttribute('aria-expanded', 'true');
+    expect(new URL(owner.url()).pathname).toBe('/');
+    await expect(owner.getByRole('link', { name: 'Launch brief', exact: true })).toBeVisible();
+    await owner.getByRole('link', { name: 'Tags', exact: true }).click();
     await expect(owner.getByRole('link', { name: 'Tags', exact: true })).toHaveAttribute('aria-current', 'page');
   });
 
@@ -84,15 +122,17 @@ test.describe('Projects', () => {
     await expect(dialog.getByLabel('Project name')).toBeFocused();
     await dialog.getByLabel('Project name').fill('New project');
     await dialog.getByRole('button', { name: 'Create project', exact: true }).click();
-    await owner.waitForURL((url) => url.pathname.startsWith('/p/'));
-    brandId = new URL(owner.url()).pathname.split('/').pop()!;
-    await expect(owner.getByText('This project is empty.', { exact: true })).toBeVisible();
-    await owner.locator('.project-menu summary').click();
-    await owner.getByRole('button', { name: 'Rename project', exact: true }).click();
+    await owner.waitForURL((url) => url.pathname === '/' && url.hash.startsWith('#project-'));
+    brandId = new URL(owner.url()).hash.slice('#project-'.length);
+    const contents = owner.locator(`#project-contents-${brandId}`);
+    await expect(contents.getByText('This project is empty.', { exact: true })).toBeVisible();
+    await owner.getByRole('button', { name: 'Project settings: New project', exact: true }).click();
+    await expect(owner.getByRole('button', { name: 'New project', exact: true }).filter({ has: owner.locator('.project-chevron') })).toHaveAttribute('aria-expanded', 'true');
+    await owner.locator(`#project-menu-${brandId}`).getByRole('button', { name: 'Rename project', exact: true }).click();
     await owner.locator('dialog[open]').getByLabel('Project name').fill('Brand refresh');
     await owner.locator('dialog[open]').getByRole('button', { name: 'Rename project', exact: true }).click();
-    await expect(owner.locator('main h1')).toHaveText('Brand refresh');
-    expect(new URL(owner.url()).pathname).toBe(`/p/${brandId}`);
+    await expect(owner.getByRole('button', { name: 'Brand refresh', exact: true })).toHaveAttribute('aria-expanded', 'true');
+    expect(new URL(owner.url()).pathname).toBe('/');
     await expect(owner.locator('#project-feedback')).toHaveText('Project renamed.');
   });
 
@@ -115,32 +155,38 @@ test.describe('Projects', () => {
     expect((await member.request.get(`/p/${launchId}`)).status()).toBe(404);
   });
 
-  test('create-and-move from a Project returns safely when its last readable artifact leaves', async () => {
+  test('create-and-move inline removes a Project when its last readable artifact leaves', async () => {
     expect((await callTool(owner.request, pat, 'move_artifact', { document_id: artifactId, project: 'Website launch' })).isError).toBeFalsy();
-    await member.goto(`/p/${launchId}?view=tags`);
+    await member.goto(`/?view=folders#project-${launchId}`);
     await member.locator(`[data-move-to-project][data-document-id="${artifactId}"]`).click();
     const dialog = member.locator('dialog[open]');
     await expect(dialog.getByLabel('Project', { exact: true })).toHaveValue('Website launch');
     await dialog.getByRole('button', { name: 'New project', exact: true }).click();
     await dialog.getByLabel('Project name').fill('Member destination');
     await dialog.getByRole('button', { name: 'Create and move', exact: true }).click();
-    await member.waitForURL('/?view=tags');
     await expect(member.locator('#project-feedback')).toHaveText('Project created and artifact moved.');
     const metadata = await (await member.request.get(`/api/docs/${artifactId}`)).json();
     memberProjectId = metadata.document.project.id;
-    await expect(member.locator('.project-tag', { hasText: 'Member destination' })).toBeVisible();
+    expect(new URL(member.url()).pathname).toBe('/');
+    await expect(member.getByRole('button', { name: 'Website launch', exact: true })).toHaveCount(0);
+    await member.getByRole('button', { name: 'Member destination', exact: true }).click();
+    await expect(member.getByRole('link', { name: 'Launch brief', exact: true })).toBeVisible();
     expect((await member.request.get(`/p/${launchId}`)).status()).toBe(404);
   });
 
-  test('delete confirmation preserves the artifact and unfiles it in Tag view', async () => {
-    await member.goto(`/p/${memberProjectId}`);
-    await member.locator('.project-menu summary').click();
+  test('inline delete preserves the artifact and unfiles it in both views', async () => {
+    await member.getByRole('button', { name: 'Member destination', exact: true }).click();
+    await member.getByRole('button', { name: 'Project settings: Member destination', exact: true }).click();
+    await expect(member.getByRole('button', { name: 'Member destination', exact: true })).toHaveAttribute('aria-expanded', 'false');
     member.once('dialog', async (dialog) => {
       expect(dialog.message()).toContain('Artifacts and their sharing settings will be kept.');
       await dialog.accept();
     });
-    await member.getByRole('button', { name: 'Delete project', exact: true }).click();
-    await member.waitForURL('/?view=tags');
+    await member.locator(`#project-menu-${memberProjectId}`).getByRole('button', { name: 'Delete project', exact: true }).click();
+    await expect(member.locator('#project-feedback')).toHaveText('Project deleted. Its artifacts are now Unfiled.');
+    await expect(member.getByRole('button', { name: 'Member destination', exact: true })).toHaveCount(0);
+    await expect(member.getByRole('link', { name: 'Launch brief', exact: true })).toBeVisible();
+    await member.getByRole('link', { name: 'Tags', exact: true }).click();
     const row = member.locator('tr', { has: member.getByRole('link', { name: 'Launch brief', exact: true }) });
     await expect(row.getByLabel('Unfiled')).toBeVisible();
     const metadata = await (await member.request.get(`/api/docs/${artifactId}`)).json();
@@ -172,7 +218,22 @@ test.describe('Projects', () => {
     });
     const mobile = await mobileContext.newPage();
     await mobile.goto('/?view=folders');
-    await expect(mobile.getByRole('link', { name: 'Website launch', exact: true })).toBeVisible();
+    const folder = mobile.getByRole('button', { name: 'Website launch', exact: true });
+    await expect(folder).toBeVisible();
+    await folder.tap();
+    await expect(folder).toHaveAttribute('aria-expanded', 'true');
+    await folder.tap();
+    await expect(folder).toHaveAttribute('aria-expanded', 'false');
+    const settings = mobile.getByRole('button', { name: 'Project settings: Website launch', exact: true });
+    await settings.tap();
+    const menu = mobile.locator(`#project-menu-${launchId}`);
+    await expect(menu.getByRole('button', { name: 'Rename project', exact: true })).toBeVisible();
+    const bounds = (await menu.boundingBox())!;
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+    await expect(folder).toHaveAttribute('aria-expanded', 'false');
+    await mobile.getByRole('heading', { name: 'Documents', exact: true }).tap();
+    await expect(menu).toBeHidden();
     await mobile.getByRole('link', { name: 'Tags', exact: true }).tap();
     await mobile.locator(`[data-move-to-project][data-document-id="${artifactId}"]`).tap();
     const dialog = mobile.locator('dialog[open]');

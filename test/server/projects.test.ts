@@ -169,8 +169,9 @@ describe('Projects routes and discovery', () => {
   test('Folder and Tag views keep identical assignments and scope preferences per user', async () => {
     const before = db.select().from(documents).all();
     const folders = await (await request('owner', '/?view=folders')).text();
-    expect(folders).toContain(`/p/${mixedProject}`);
-    expect(folders).not.toContain(`href="/d/${publicId}"`);
+    expect(folders).toContain(`aria-controls="project-contents-${mixedProject}"`);
+    expect(folders).toContain(`id="project-contents-${mixedProject}" hidden`);
+    expect(folders).toContain(`href="/d/${publicId}"`);
     const selected = await request('owner', '/?view=tags');
     const tags = await selected.text();
     expect(tags).toContain(`href="/d/${publicId}"`);
@@ -179,7 +180,7 @@ describe('Projects routes and discovery', () => {
     const remembered = await app.request('/', { headers: { cookie: `${cookies.owner}; ${preference}` } });
     expect(await remembered.text()).toContain(`href="/d/${publicId}"`);
     const another = await app.request('/', { headers: { cookie: `${cookies.member}; ${preference}` } });
-    expect(await another.text()).not.toContain(`href="/d/${publicId}"`);
+    expect(await another.text()).toContain(`aria-controls="project-contents-${mixedProject}"`);
     expect(db.select().from(documents).all()).toEqual(before);
   });
 

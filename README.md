@@ -8,7 +8,9 @@ MCP, revises, and republishes; comments re-anchor onto the new version so the te
 
 ## Projects
 
-Projects organize a team's artifacts without changing who can open or edit them. Each artifact is either assigned to one Project or **Unfiled**. Folder view shows accessible Projects as rows that open their artifact lists; Tag view keeps the flat artifact list and shows each assignment as a Project tag. The view choice is personal and is remembered in the browser.
+Projects organize a team's artifacts without changing who can open or edit them. Each artifact is either assigned to one Project or **Unfiled**. In Folder view, click a Project row to expand or collapse its artifacts directly on the documents screen. Multiple Projects can stay open, with expansion remembered per account in the current browser tab. The settings icon after Last published offers Rename and Delete whether the Project is expanded or collapsed. Tag view keeps the flat artifact list and shows each assignment as a Project tag; clicking a tag reveals that Project in Folder view. The view choice is personal and is remembered in the browser.
+
+Every data column in Tag view is sortable: Artifact, Sharing, Versions, Open comments, Last published, and Project. Click a header to sort ascending, then click again to reverse it. Counts sort numerically and publication times chronologically; Unfiled and missing dates stay last in either direction. Sorting applies across the team lists and is remembered per account in the browser. The default is most recently published first.
 
 Project visibility follows artifact access. An empty Project is visible to all current team members; a populated Project appears only when the member can read at least one artifact in it, and its counts include only artifacts that member can read. Externally shared artifacts remain in **Shared with you** without exposing their owning team's Project metadata.
 
@@ -87,6 +89,21 @@ npm run e2e      # Playwright end-to-end tests
 Two dev-only env vars avoid real email: `DEV_LOGIN_CODE_FILE=<path>` writes sign-in codes to a file, and
 `DEV_LOGIN_CODE=123456` accepts that fixed code for any email that passes the sign-in gate. Never set either in
 production — the server refuses to start if `DEV_LOGIN_CODE` is set while `NODE_ENV=production`.
+
+### Local demo data
+
+Run `npm run seed:local` to populate the local SQLite database with two demo teams, nine Projects, and 23 artifacts. The seed loads `.env`, uses `DATABASE_PATH` (default `data/app.db`), and adds the first `INSTANCE_ADMIN_EMAILS` account to both demo teams. To choose another account, run `SEED_USER_EMAIL=you@example.com npm run seed:local`. With neither setting, Alex is the default demo account. Existing accounts, teams, and artifacts are preserved; rerunning skips existing demo artifacts, including any moves, revisions, or comments you have made while testing.
+
+Refresh `http://localhost:3000/?view=folders` or `http://localhost:3000/?view=tags` after seeding. The examples include an empty Project, three Unfiled artifacts, a long Project name, the same Project name in different teams, Team/Public/Private sharing, one to three versions per artifact, and open and resolved comments. **Leadership planning** contains only Maya's private artifacts, so it is hidden from other accounts; **Website launch** contains three team-readable artifacts and one private artifact that only Maya sees. Your selected account also has Editor access to the private mobile handoff and Viewer access to the private customer advisory notes.
+
+Use the same configured `DEV_LOGIN_CODE` for these demo emails, or read their sign-in codes from `DEV_LOGIN_CODE_FILE`:
+
+| Account | What to try |
+| --- | --- |
+| `alex@example.test` | Product Studio; team administration and shared artifacts |
+| `maya@example.test` | Both teams; private artifacts and Leadership planning |
+| `sam@example.test` | Both teams; a different mix of owned and shared artifacts |
+| `riley@example.test` | External guest; two artifacts under Shared with you, one Editor and one Viewer, with no Project metadata |
 
 ## Good to know
 

@@ -1,9 +1,13 @@
 /** Project creation/management plus document-list move controls. */
 
 import { initMovePickers, showStoredProjectFeedback, storeProjectFeedback } from './projectPicker.js';
+import { initDocumentSorting } from './documentSorting.js';
+import { initProjectFolders } from './projectFolders.js';
+import { initProjectMenus } from './projectMenus.js';
 
 interface ProjectsData {
   csrfToken: string;
+  userId?: string;
   project?: { id: string; name: string };
   view?: 'folders' | 'tags';
 }
@@ -96,7 +100,7 @@ function initCreate(data: ProjectsData): void {
         const payload = await response.json().catch(() => null) as ProjectMutation | null;
         if (!response.ok || !payload?.project) throw new Error(responseError(payload, 'Could not create this project.'));
         storeProjectFeedback('Project created.');
-        window.location.assign(`/p/${encodeURIComponent(payload.project.id)}`);
+        window.location.assign(`/?view=folders#project-${encodeURIComponent(payload.project.id)}`);
       }).catch((error: unknown) => {
         button.disabled = false;
         setFeedback(error instanceof Error ? error.message : 'Could not create this project.', 'error');
@@ -106,45 +110,48 @@ function initCreate(data: ProjectsData): void {
 }
 
 function initManage(data: ProjectsData): void {
-  if (!data.project) return;
-  const project = data.project;
-  const rename = document.querySelector<HTMLButtonElement>('[data-rename-project]');
-  rename?.addEventListener('click', () => void askForName('Rename project', 'Rename project', project.name).then((name) => {
-    if (name === null) return;
-    rename.disabled = true;
-    setFeedback('Renaming project…');
-    return fetch(`/api/projects/${encodeURIComponent(project.id)}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json', 'x-csrf-token': data.csrfToken },
-      body: JSON.stringify({ name }),
-    }).then(async (response) => {
-      const payload = await response.json().catch(() => null) as ProjectMutation | null;
-      if (!response.ok || !payload?.project) throw new Error(responseError(payload, 'Could not rename this project.'));
-      storeProjectFeedback('Project renamed.');
-      window.location.reload();
-    }).catch((error: unknown) => {
-      rename.disabled = false;
-      setFeedback(error instanceof Error ? error.message : 'Could not rename this project.', 'error');
-    });
-  }));
+  document.querySelectorAll<HTMLButtonElement>('[data-rename-project]').forEach((rename) => {
+    const project = { id: rename.dataset.projectId ?? data.project?.id ?? '', name: rename.dataset.projectName ?? data.project?.name ?? '' };
+    rename.addEventListener('click', () => void askForName('Rename project', 'Rename project', project.name).then((name) => {
+      if (name === null) return;
+      rename.disabled = true;
+      setFeedback('Renaming project…');
+      return fetch(`/api/projects/${encodeURIComponent(project.id)}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', 'x-csrf-token': data.csrfToken },
+        body: JSON.stringify({ name }),
+      }).then(async (response) => {
+        const payload = await response.json().catch(() => null) as ProjectMutation | null;
+        if (!response.ok || !payload?.project) throw new Error(responseError(payload, 'Could not rename this project.'));
+        storeProjectFeedback('Project renamed.');
+        window.location.reload();
+      }).catch((error: unknown) => {
+        rename.disabled = false;
+        setFeedback(error instanceof Error ? error.message : 'Could not rename this project.', 'error');
+      });
+    }));
+  });
 
-  const remove = document.querySelector<HTMLButtonElement>('[data-delete-project]');
-  remove?.addEventListener('click', () => {
-    const confirmed = window.confirm('Delete this project? Its artifacts will become Unfiled for the team. Artifacts and their sharing settings will be kept.');
-    if (!confirmed) return;
-    remove.disabled = true;
-    setFeedback('Deleting project…');
-    void fetch(`/api/projects/${encodeURIComponent(project.id)}`, {
-      method: 'DELETE',
-      headers: { 'x-csrf-token': data.csrfToken },
-    }).then(async (response) => {
-      const payload = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(responseError(payload, 'Could not delete this project.'));
-      storeProjectFeedback('Project deleted. Its artifacts are now Unfiled.');
-      window.location.assign(`/?view=${data.view ?? 'folders'}`);
-    }).catch((error: unknown) => {
-      remove.disabled = false;
-      setFeedback(error instanceof Error ? error.message : 'Could not delete this project.', 'error');
+  document.querySelectorAll<HTMLButtonElement>('[data-delete-project]').forEach((remove) => {
+    const projectId = remove.dataset.projectId ?? data.project?.id ?? '';
+    remove.addEventListener('click', () => {
+      const confirmed = window.confirm('Delete this project? Its artifacts will become Unfiled for the team. Artifacts and their sharing settings will be kept.');
+      if (!confirmed) return;
+      remove.disabled = true;
+      setFeedback('Deleting project…');
+      void fetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+        method: 'DELETE',
+        headers: { 'x-csrf-token': data.csrfToken },
+      }).then(async (response) => {
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) throw new Error(responseError(payload, 'Could not delete this project.'));
+        storeProjectFeedback('Project deleted. Its artifacts are now Unfiled.');
+        if (data.project) window.location.assign(`/?view=${data.view ?? 'folders'}`);
+        else window.location.reload();
+      }).catch((error: unknown) => {
+        remove.disabled = false;
+        setFeedback(error instanceof Error ? error.message : 'Could not delete this project.', 'error');
+      });
     });
   });
 }
@@ -154,6 +161,9 @@ function boot(): void {
   if (!bootstrap?.textContent) return;
   const data = JSON.parse(bootstrap.textContent) as ProjectsData;
   showStoredProjectFeedback();
+  initProjectFolders(`artifact-colab-open-projects-${data.userId ?? ''}`);
+  initProjectMenus();
+  initDocumentSorting(`artifact-colab-document-sort-${data.userId ?? ''}`);
   initCreate(data);
   initManage(data);
   initMovePickers({ csrfToken: data.csrfToken, honorReturnUrl: window.location.pathname.startsWith('/p/') });

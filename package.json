@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/server/index.ts",
+    "seed:local": "tsx scripts/seed-local.ts",
     "build:annotator": "esbuild src/annotator/main.ts --bundle --format=iife --global-name=ArtifactAnnotator --target=es2020 --minify --outfile=dist/annotator.js",
     "build:viewer": "esbuild src/client/viewer.ts --bundle --format=iife --target=es2020 --minify --outfile=dist/viewer.js",
     "build:projects": "esbuild src/client/projects.ts --bundle --format=iife --target=es2020 --minify --outfile=dist/projects.js",

@@ -149,7 +149,7 @@ The artifact-specific session upload endpoint `/api/docs/:slug/versions` remains
 - Resolve a valid `?view=folders|tags` first, then a user-scoped browser cookie, then the Folder default. Persist an explicitly selected valid mode. Validate cookie/query values and use a cookie key scoped to the current user to avoid inheriting another account's choice in a shared browser.
 - Apply the chosen mode consistently to each existing team group. Place New project within its team context; a single-team user does not need a team picker.
 - Keep Shared with you separate and flat in both modes.
-- Preserve existing artifact ordering and columns. A mode change never writes Project assignments.
+- Preserve existing artifact columns. Tag view adds sorting as described below. A mode change never writes Project assignments.
 - Menus must be discoverable on touch and reachable by keyboard, not only visible on hover. Reuse the current table style and mobile scroll behavior.
 
 ### Folder view
@@ -157,7 +157,7 @@ The artifact-specific session upload endpoint `/api/docs/:slug/versions` remains
 - Render accessible Project rows above unassigned artifact rows. Show Project name, visible artifact count, open-comment total, and latest publication time across readable artifacts.
 - Label the timestamp **Last published**, matching current artifact rows. Renames/moves and inaccessible artifact activity do not bump it. Count open top-level comment threads using the existing definition, rather than replies.
 - Show Unfiled only when the user has at least one accessible Project in that team. Hidden Projects must not change the page's empty-state copy or add a divider.
-- Open `/p/:id` with a team-aware breadcrumb, the Project name, its artifact table, and a Project menu containing Rename project and Delete project.
+- Clicking a Project row expands/collapses its artifact table inline on the main documents screen. Multiple Projects can remain open. Use keyboard-accessible disclosure buttons with `aria-expanded` and `aria-controls`, and remember expanded IDs per account in the current tab. Each Project row has a settings icon after Last published, styled like the outlined Move button. It offers Rename project and Delete project in both expanded and collapsed states without toggling the folder. Its popover stays visible outside the table bounds. Creating a Project reveals it inline. Existing `/p/:id` links remain supported as authorized standalone pages.
 - Empty Projects have a useful empty state explaining publishing with the Project name and Move to project. A populated Project with no readable artifacts is hidden/404, not shown with an empty-state placeholder.
 - Remember the chosen root view when returning from a Project page. Project pages always show their own artifact list, independent of the root display mode.
 
@@ -165,7 +165,8 @@ The artifact-specific session upload endpoint `/api/docs/:slug/versions` remains
 
 - Keep every readable artifact in its existing flat team list, regardless of assignment.
 - Add a Project column containing one compact name tag or a neutral dash for Unfiled.
-- Clicking a Project tag opens its Project page. The same Move to project action changes the tag and the Folder view assignment.
+- Clicking a Project tag reveals and expands it at `/?view=folders#project-:id`. The same Move to project action changes the tag and the Folder view assignment.
+- Every data header sorts ascending/descending: Artifact and Sharing by display text, Versions and Open comments numerically, Last published by timestamp, and Project by name. Default to newest publication first. Apply the chosen order across team lists and remember it per account in the browser. Keep Unfiled and missing dates last in both directions; break equal values consistently by artifact title and ID. Expose the active direction with `aria-sort`. Shared with you sorts its own available columns without exposing Project metadata.
 - Do not render separate Project rows in this mode. Genuinely empty Projects remain reachable through Folder view and the move picker.
 - Do not add multi-select tags, personal tagging, or a second assignment table.
 
