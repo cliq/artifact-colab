@@ -63,15 +63,30 @@ export function pruneDocumentWatches(db: DBOrTx, documentId: string): void {
   }
 }
 
-/** Local directory only: team members plus the active owner and accepted grants. */
-export function mentionableUsers(db: DBOrTx, documentId: string): User[] {
-  const doc = db.select().from(documents).where(eq(documents.id, documentId)).get();
-  if (!doc) return [];
+/**
+ * The local mention directory visible to `actorId`.
+ *
+ * Active team members retain the full artifact directory. Accepted outsiders
+ * see only the owner and other accepted collaborators, while an uninvited
+ * Public-link guest sees only the owner. Every candidate is independently
+ * checked for current document access before it is returned.
+ */
+export function mentionableUsers(db: DBOrTx, documentId: string, actorId: string): User[] {
+  const actorAccess = resolveDocumentAccess(db, documentId, actorId);
+  if (!actorAccess) return [];
+  const doc = actorAccess.document;
   const ids = new Set<string>([doc.createdBy]);
-  if (doc.visibility !== 'private') {
+  if (actorAccess.isMember && doc.visibility !== 'private') {
     for (const member of db.select().from(teamMembers).where(eq(teamMembers.teamId, doc.teamId)).all()) ids.add(member.userId);
   }
-  for (const grant of db.select().from(documentCollaborators).where(eq(documentCollaborators.documentId, doc.id)).all()) ids.add(grant.userId);
+  const actorGrant = db
+    .select({ userId: documentCollaborators.userId })
+    .from(documentCollaborators)
+    .where(and(eq(documentCollaborators.documentId, doc.id), eq(documentCollaborators.userId, actorId)))
+    .get();
+  if (actorAccess.isMember || (actorAccess.ownerActive && actorGrant)) {
+    for (const grant of db.select().from(documentCollaborators).where(eq(documentCollaborators.documentId, doc.id)).all()) ids.add(grant.userId);
+  }
   return [...ids].filter((id) => !!resolveDocumentAccess(db, doc.id, id)).flatMap((id) => {
     const user = db.select().from(users).where(eq(users.id, id)).get();
     return user ? [user] : [];
