@@ -10,7 +10,7 @@
  * shared/diff.ts and unit-tested there).
  */
 
-import { diffText, wordsAfter, wordsBefore, type DiffHunk } from '../shared/diff.js';
+import { DiffLimitError, diffText, wordsAfter, wordsBefore, type DiffHunk } from '../shared/diff.js';
 import type { StorageArea, StorageContents } from '../shared/frameStorage.js';
 import { AnnotatorBridge } from './bridge.js';
 import { FrameScaler } from './frameScale.js';
@@ -42,6 +42,10 @@ const COMPARE_CSS = `
 .change-card ins { background: rgba(34, 197, 94, 0.22); color: #166534; text-decoration: none; border-radius: 2px; padding: 0 2px; }
 .compare-empty { font-size: 12.5px; color: var(--color-muted); }
 .compare-empty p { margin: 0 0 6px; }
+.frame-wrap.comparing.comparison-unavailable { grid-template-columns: 1fr; }
+.comparison-unavailable #compare-pane-old { display: none; }
+.comparison-unavailable #compare-pane-new { border-left: 0; }
+.comparison-unavailable .pane-kind { display: none; }
 `;
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -94,6 +98,8 @@ export function initCompare(compare: CompareData): void {
   let newText: string | null = null;
   let hunks: DiffHunk[] = [];
   let focusedId: string | null = null;
+  let comparisonUnavailable = false;
+  let highlightsSupported = true;
   const cards = new Map<string, HTMLElement>();
 
   const label = `v${compare.oldVersionNumber} → v${compare.newVersionNumber}`;
@@ -107,6 +113,35 @@ export function initCompare(compare: CompareData): void {
   function renderWaiting(): void {
     sidebar!.textContent = '';
     sidebar!.appendChild(el('div', 'compare-empty', [el('p', undefined, [`Comparing ${label}…`])]));
+  }
+
+  function setUnavailable(unavailable: boolean): void {
+    comparisonUnavailable = unavailable;
+    document.getElementById('frame-wrap')?.classList.toggle('comparison-unavailable', unavailable);
+    if (noHighlightsBanner) noHighlightsBanner.hidden = unavailable || highlightsSupported;
+    refit();
+  }
+
+  function renderUnavailable(): void {
+    clearFocus();
+    hunks = [];
+    cards.clear();
+    oldBridge.sendDiff('removed', []);
+    newBridge.sendDiff('added', []);
+    setUnavailable(true);
+    setTitle('Comparison unavailable');
+    if (prevButton) prevButton.disabled = true;
+    if (nextButton) nextButton.disabled = true;
+    const link = el('a', undefined, [`View v${compare.newVersionNumber} without comparison`]);
+    link.href = `/d/${encodeURIComponent(compare.slug)}?version=${compare.newVersionNumber}`;
+    const message = el('div', 'compare-empty', [
+      el('p', undefined, ['These versions are too large or have too many changes to compare.']),
+      el('p', undefined, [`Version ${compare.newVersionNumber} is shown here. You can still view each version on its own.`]),
+      link,
+    ]);
+    message.id = 'compare-unavailable';
+    message.setAttribute('role', 'status');
+    sidebar!.replaceChildren(message);
   }
 
   /** The words around a hunk, taken from whichever text has content there. */
@@ -208,7 +243,14 @@ export function initCompare(compare: CompareData): void {
       renderWaiting();
       return;
     }
-    hunks = diffText(oldText, newText);
+    try {
+      hunks = diffText(oldText, newText);
+    } catch (error) {
+      if (!(error instanceof DiffLimitError)) throw error;
+      renderUnavailable();
+      return;
+    }
+    if (comparisonUnavailable) setUnavailable(false);
     oldBridge.sendDiff(
       'removed',
       hunks.map((h) => ({ id: h.id, start: h.oldStart, end: h.oldEnd })),
@@ -227,7 +269,8 @@ export function initCompare(compare: CompareData): void {
     else clearFocus();
   };
   const onCapabilities = (highlights: boolean): void => {
-    if (!highlights) noHighlightsBanner?.removeAttribute('hidden');
+    highlightsSupported &&= highlights;
+    if (noHighlightsBanner) noHighlightsBanner.hidden = comparisonUnavailable || highlightsSupported;
   };
   // Both versions share the document's storage, as they would share an origin.
   const onStorage = (area: StorageArea, contents: StorageContents): void =>

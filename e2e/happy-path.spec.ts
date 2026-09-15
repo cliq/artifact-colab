@@ -231,7 +231,7 @@ test.describe('happy path', () => {
 
     const adminPage = await context.newPage();
     await adminPage.goto('/admin');
-    await adminPage.locator('a[href^="/admin/teams/"]').first().click();
+    await adminPage.getByRole('link', { name: 'E2E Team', exact: true }).click();
     await adminPage.fill('#invite-email', BOB);
     await adminPage.click('#invite-email >> xpath=ancestor::form//button[@type="submit"]');
     await expect(adminPage.locator('main')).toContainText(`${BOB} was added to the team.`);
