@@ -140,6 +140,19 @@ describe('comparison limits', () => {
     expect(diffText('before', 'after')).toHaveLength(1);
   });
 
+  test('compares a fully rewritten 500-word document from a shared vocabulary', () => {
+    // Seeded word choices model a rewritten memo with scattered shared words,
+    // which costs more search work than one contiguous insertion or deletion.
+    const document = (seed: number): string => Array.from({ length: 500 }, () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return `word${seed % 800}`;
+    }).join(' ');
+    const oldText = document(1);
+    const newText = document(2);
+    expect(oldText).not.toBe(newText);
+    expect(apply(oldText, newText)).toBe(newText);
+  });
+
   test('still supports a small edit in a long version', () => {
     const oldText = Array.from({ length: MAX_DIFF_TOKENS }, (_, i) => `w${i}`).join(' ');
     const newText = oldText.replace('w5000', 'changed');
