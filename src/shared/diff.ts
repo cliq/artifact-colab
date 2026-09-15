@@ -26,7 +26,7 @@ export interface DiffHunk {
 // much more text, and a short rewrite can still require quadratic diff work.
 export const MAX_DIFF_TEXT_LENGTH = 100_000;
 export const MAX_DIFF_TOKENS = 10_000;
-export const MAX_DIFF_WORK = 200_000;
+export const MAX_DIFF_WORK = 1_000_000;
 export const MAX_DIFF_HUNKS = 200;
 
 export class DiffLimitError extends Error {
