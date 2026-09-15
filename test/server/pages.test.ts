@@ -116,9 +116,14 @@ describe('pages', () => {
   test('GET /signin renders the email form', async () => {
     const res = await app.request('/signin');
     expect(res.status).toBe(200);
+    const csrf = setCookieValue(res, 'csrf');
+    expect(csrf).toBeDefined();
     const html = await res.text();
     expect(html).toContain('email-form');
     expect(html).toContain('Sign in');
+    expect(html).toContain(`name="_csrf" value="${csrf}"`);
+    expect(html).toContain(`id="signin-csrf" value="${csrf}"`);
+    expect(html).toContain("'x-csrf-token': csrfToken");
   });
 
   test('token settings: create shows plaintext once, list hides it afterward, delete removes it', async () => {

@@ -138,14 +138,14 @@ describe('private document collaboration', () => {
 
     const requestCode = await app.request('/auth/request-code', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: headers(),
       body: JSON.stringify({ email: 'GUEST@EXTERNAL.TEST' }),
     });
     expect(requestCode.status).toBe(200);
 
     const verify = await app.request('/auth/verify-code', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: headers(),
       body: JSON.stringify({ email: 'guest@external.test', code: '654321', next: `/invitations/${token}` }),
     });
     expect(verify.status).toBe(200);
@@ -288,7 +288,7 @@ describe('private document collaboration', () => {
     const invitation = db.select().from(documentInvitations).where(eq(documentInvitations.email, email)).get()!;
     const requestCode = await app.request('/auth/request-code', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: headers(),
       body: JSON.stringify({ email }),
     });
     expect(requestCode.status).toBe(200);
@@ -302,7 +302,7 @@ describe('private document collaboration', () => {
     expect(cancel.status).toBe(200);
     const verify = await app.request('/auth/verify-code', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: headers(),
       body: JSON.stringify({ email, code }),
     });
     expect(verify.status).toBe(400);
@@ -326,7 +326,7 @@ describe('private document collaboration', () => {
       (
         await app.request('/auth/request-code', {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: headers(),
           body: JSON.stringify({ email: expiredEmail }),
         })
       ).status,
@@ -380,7 +380,7 @@ describe('private document collaboration', () => {
 
     const verify = await app.request('/auth/verify-code', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: headers(),
       body: JSON.stringify({ email, code: '654321', next: `/invitations/${token}` }),
     });
     const session = cookieValue(verify, 'session')!;

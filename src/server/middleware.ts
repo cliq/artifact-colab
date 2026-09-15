@@ -14,11 +14,31 @@ import type { AppEnv } from './context.js';
 
 // /api/publish is Bearer-authed (no cookies), so CSRF doesn't apply — and the
 // check would otherwise consume the multipart body before the handler runs.
-const CSRF_EXEMPT_PREFIXES = ['/mcp', '/auth/', '/api/publish'];
+const CSRF_EXEMPT_PREFIXES = ['/mcp', '/api/publish'];
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 function isSecure(baseUrl: string): boolean {
   return baseUrl.startsWith('https');
+}
+
+function hasTrustedAuthProvenance(c: Context<AppEnv>): boolean {
+  const origin = c.req.header('origin');
+  if (origin !== undefined) {
+    try {
+      if (new URL(origin).origin !== new URL(c.get('config').baseUrl).origin) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  // Originless command-line clients remain supported. Browser requests that
+  // omit Origin still identify sibling/cross-site initiators through Fetch
+  // Metadata, which also prevents a parent-domain cookie injection from
+  // satisfying the double-submit check on its own.
+  const fetchSite = c.req.header('sec-fetch-site')?.toLowerCase();
+  return fetchSite !== 'same-site' && fetchSite !== 'cross-site';
 }
 
 export function setSessionCookie(c: Context<AppEnv>, token: string, maxAgeSeconds: number): void {
@@ -104,6 +124,10 @@ export function csrfProtect(): MiddlewareHandler<AppEnv> {
     }
 
     if (MUTATING_METHODS.has(method)) {
+      if (path.startsWith('/auth/') && !hasTrustedAuthProvenance(c)) {
+        return c.json({ error: 'invalid csrf token' }, 403);
+      }
+
       const cookieValue = getCookie(c, 'csrf');
       const headerValue = c.req.header('x-csrf-token');
       let formValue: string | undefined;
