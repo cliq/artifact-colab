@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { diffText, wordsAfter, wordsBefore } from '../../src/shared/diff.js';
+import { DiffLimitError, diffText, MAX_DIFF_HUNKS, MAX_DIFF_TEXT_LENGTH, MAX_DIFF_TOKENS, wordsAfter, wordsBefore } from '../../src/shared/diff.js';
 
 /** Rebuild the new text from the old one by applying the hunks (whitespace-normalized). */
 function apply(oldText: string, newText: string): string {
@@ -111,6 +111,49 @@ describe('diffText', () => {
     const newText = 'b c d e f a';
     // Moving one token to the end is a delete plus an insert: two hunks, not a rewrite.
     expect(diffText(oldText, newText)).toHaveLength(2);
+  });
+});
+
+describe('comparison limits', () => {
+  test('accepts the text-length boundary and refuses even identical oversized text', () => {
+    const atLimit = 'a'.repeat(MAX_DIFF_TEXT_LENGTH);
+    expect(diffText(atLimit, atLimit)).toEqual([]);
+    for (const pair of [[atLimit + 'a', ''], ['', atLimit + 'a'], [atLimit + 'a', atLimit + 'a']]) {
+      expect(() => diffText(pair[0]!, pair[1]!)).toThrow(new DiffLimitError('text'));
+    }
+  });
+
+  test('bounds words separately from characters, including unchanged versions', () => {
+    const atLimit = Array(MAX_DIFF_TOKENS).fill('a').join(' ');
+    expect(diffText(atLimit, atLimit)).toEqual([]);
+    expect(diffText('', atLimit)).toHaveLength(1);
+    const oversized = atLimit + ' a';
+    for (const pair of [[oversized, ''], ['', oversized], [oversized, oversized]]) {
+      expect(() => diffText(pair[0]!, pair[1]!)).toThrow(new DiffLimitError('tokens'));
+    }
+  });
+
+  test('aborts costly rewrites below both input-size limits and resets the work budget per call', () => {
+    const oldText = Array.from({ length: 2000 }, (_, i) => `before${i}`).join(' ');
+    const newText = Array.from({ length: 2000 }, (_, i) => `after${i}`).join(' ');
+    expect(() => diffText(oldText, newText)).toThrow(new DiffLimitError('work'));
+    expect(diffText('before', 'after')).toHaveLength(1);
+  });
+
+  test('still supports a small edit in a long version', () => {
+    const oldText = Array.from({ length: MAX_DIFF_TOKENS }, (_, i) => `w${i}`).join(' ');
+    const newText = oldText.replace('w5000', 'changed');
+    expect(diffText(oldText, newText)).toHaveLength(1);
+    expect(apply(oldText, newText)).toBe(newText);
+  });
+
+  test('bounds rendered changes without returning a partial comparison', () => {
+    const versions = (count: number) => [
+      Array.from({ length: count }, (_, i) => `old${i} keep same`).join(' '),
+      Array.from({ length: count }, (_, i) => `new${i} keep same`).join(' '),
+    ] as const;
+    expect(diffText(...versions(MAX_DIFF_HUNKS))).toHaveLength(MAX_DIFF_HUNKS);
+    expect(() => diffText(...versions(MAX_DIFF_HUNKS + 1))).toThrow(new DiffLimitError('hunks'));
   });
 });
 
