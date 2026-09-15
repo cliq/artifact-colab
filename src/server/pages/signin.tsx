@@ -24,6 +24,7 @@ const inlineScript = `
   var codeEmailField = document.getElementById('code-email');
   var errorBox = document.getElementById('signin-error');
   var next = document.getElementById('next-value').value;
+  var csrfToken = document.getElementById('signin-csrf').value;
 
   function showError(message) {
     errorBox.textContent = message;
@@ -42,7 +43,7 @@ const inlineScript = `
     showError('');
     fetch('/auth/request-code', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken },
       body: JSON.stringify({ email: emailInput.value }),
     })
       .then(function (res) { return res.json().then(function (data) { return { res: res, data: data }; }); })
@@ -64,7 +65,7 @@ const inlineScript = `
     showError('');
     fetch('/auth/verify-code', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken },
       body: JSON.stringify({ email: codeEmailField.value, code: codeInput.value, next: next || undefined }),
     })
       .then(function (res) { return res.json().then(function (data) { return { res: res, data: data }; }); })
@@ -87,8 +88,10 @@ export const SigninPage: FC<SigninPageProps> = ({ next, csrfToken, selfSignup })
         <h1>{selfSignup ? 'Sign in or create an account' : 'Sign in'}</h1>
         <div id="signin-error" class="error-message" style="display:none"></div>
         <input type="hidden" id="next-value" value={next ?? ''} />
+        <input type="hidden" id="signin-csrf" value={csrfToken} />
 
-        <form id="email-form">
+        <form id="email-form" method="post" action="/auth/request-code">
+          <input type="hidden" name="_csrf" value={csrfToken} />
           <div class="field">
             <label for="email-input">Work email</label>
             <input type="email" id="email-input" name="email" required autofocus placeholder="you@company.com" />
@@ -96,8 +99,10 @@ export const SigninPage: FC<SigninPageProps> = ({ next, csrfToken, selfSignup })
           <button type="submit">Send code</button>
         </form>
 
-        <form id="code-form" style="display:none">
+        <form id="code-form" method="post" action="/auth/verify-code" style="display:none">
+          <input type="hidden" name="_csrf" value={csrfToken} />
           <input type="hidden" id="code-email" name="email" />
+          <input type="hidden" name="next" value={next ?? ''} />
           <div class="field">
             <label for="code-input">Enter the 6-digit code we emailed you</label>
             <input type="text" id="code-input" name="code" inputmode="numeric" autocomplete="one-time-code" required />

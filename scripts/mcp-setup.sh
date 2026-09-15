@@ -17,23 +17,26 @@ command -v curl >/dev/null || { echo "error: curl not found" >&2; exit 1; }
 
 read -r -p "Email: " EMAIL
 
+# Establish the browser-equivalent CSRF cookie before starting sign-in. Both
+# auth requests must prove they came from the client that received it.
+curl -s -c "$JAR" -o /dev/null "$BASE_URL/signin"
+CSRF=$(awk '$6=="csrf" {print $7}' "$JAR")
+
 echo "Requesting a sign-in code for $EMAIL ..."
-curl -sf -X POST "$BASE_URL/auth/request-code" \
+curl -sf -b "$JAR" -X POST "$BASE_URL/auth/request-code" \
   -H 'content-type: application/json' \
+  -H "x-csrf-token: $CSRF" \
   -d "{\"email\":\"$EMAIL\"}" >/dev/null
 
 echo "Check your email for the 6-digit code."
 echo "(Dev instances: DEV_LOGIN_CODE if set, or the DEV_LOGIN_CODE_FILE log.)"
 read -r -p "Code: " CODE
 
-VERIFY=$(curl -s -c "$JAR" -X POST "$BASE_URL/auth/verify-code" \
+VERIFY=$(curl -s -b "$JAR" -c "$JAR" -X POST "$BASE_URL/auth/verify-code" \
   -H 'content-type: application/json' \
+  -H "x-csrf-token: $CSRF" \
   -d "{\"email\":\"$EMAIL\",\"code\":\"$CODE\"}")
 echo "$VERIFY" | grep -q '"ok":true' || { echo "sign-in failed: $VERIFY" >&2; exit 1; }
-
-# A GET issues the csrf cookie needed for the token-creation POST.
-curl -s -b "$JAR" -c "$JAR" -o /dev/null "$BASE_URL/healthz"
-CSRF=$(awk '$6=="csrf" {print $7}' "$JAR")
 
 LABEL="claude-code-$(hostname -s 2>/dev/null || echo cli)"
 TOKEN_JSON=$(curl -s -b "$JAR" -X POST "$BASE_URL/tokens" \

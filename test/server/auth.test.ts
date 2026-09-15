@@ -36,8 +36,9 @@ describe('auth', () => {
   let sqlite: import('better-sqlite3').Database;
   let config: Config;
   let app: Hono<AppEnv>;
+  let authCsrf: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'ac-auth-'));
     codeFile = join(tmpDir, 'codes.log');
     writeFileSync(codeFile, '');
@@ -50,6 +51,7 @@ describe('auth', () => {
     config = baseTestConfig({ devLoginCodeFile: codeFile });
 
     app = createApp({ db, config });
+    authCsrf = await getCsrfCookie();
   });
 
   afterAll(() => {
@@ -80,7 +82,7 @@ describe('auth', () => {
   async function requestCode(email: string): Promise<Response> {
     return app.request('/auth/request-code', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', cookie: `csrf=${authCsrf}`, 'x-csrf-token': authCsrf },
       body: JSON.stringify({ email }),
     });
   }
@@ -88,7 +90,7 @@ describe('auth', () => {
   async function verifyCode(email: string, code: string): Promise<Response> {
     return app.request('/auth/verify-code', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', cookie: `csrf=${authCsrf}`, 'x-csrf-token': authCsrf },
       body: JSON.stringify({ email, code }),
     });
   }
@@ -158,6 +160,90 @@ describe('auth', () => {
     });
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: 'invalid csrf token' });
+  });
+
+  test('a same-site sibling origin cannot verify with a matching injected CSRF cookie', async () => {
+    const email = 'login-csrf@example.com';
+    await requestCode(email);
+    const code = lastCodeFor(email);
+
+    const attack = await app.request('/auth/verify-code', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        cookie: `csrf=${authCsrf}`,
+        origin: 'http://evil.localhost:3000',
+      },
+      body: new URLSearchParams({ email, code, _csrf: authCsrf }).toString(),
+    });
+    expect(attack.status).toBe(403);
+    expect(await attack.json()).toEqual({ error: 'invalid csrf token' });
+    expect(setCookieValue(attack, 'session')).toBeUndefined();
+
+    const storedCode = db.select().from(loginCodes).where(eq(loginCodes.email, email)).get();
+    expect(storedCode?.attempts).toBe(0);
+
+    const legitimate = await app.request('/auth/verify-code', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        cookie: `csrf=${authCsrf}`,
+        origin: 'http://localhost:3000',
+        'sec-fetch-site': 'same-origin',
+      },
+      body: new URLSearchParams({ email, code, next: '/settings/tokens', _csrf: authCsrf }).toString(),
+    });
+    expect(legitimate.status).toBe(302);
+    expect(legitimate.headers.get('location')).toBe('/settings/tokens');
+    expect(setCookieValue(legitimate, 'session')).toBeDefined();
+    expect(db.select().from(loginCodes).where(eq(loginCodes.email, email)).get()).toBeUndefined();
+  });
+
+  test('request-code rejects requests without browser CSRF proof', async () => {
+    const email = 'cross-site-request@example.com';
+    const res = await app.request('/auth/request-code', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'https://attacker.invalid' },
+      body: new URLSearchParams({ email }).toString(),
+    });
+    expect(res.status).toBe(403);
+    expect(() => lastCodeFor(email)).toThrow();
+  });
+
+  test.each([
+    ['a sibling origin without Fetch Metadata', 'sibling', { origin: 'http://evil.localhost:3000' }],
+    ['an opaque origin', 'opaque', { origin: 'null' }],
+    ['same-site Fetch Metadata without Origin', 'same-site', { 'sec-fetch-site': 'same-site' }],
+    ['cross-site Fetch Metadata without Origin', 'cross-site', { 'sec-fetch-site': 'cross-site' }],
+  ])('request-code rejects %s even when the CSRF values match', async (_label, emailLabel, provenanceHeaders) => {
+    const email = `blocked-${emailLabel}@example.com`;
+    const res = await app.request('/auth/request-code', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        cookie: `csrf=${authCsrf}`,
+        ...provenanceHeaders,
+      },
+      body: new URLSearchParams({ email, _csrf: authCsrf }).toString(),
+    });
+    expect(res.status).toBe(403);
+    expect(() => lastCodeFor(email)).toThrow();
+  });
+
+  test('signout still clears a session when its form carries CSRF proof', async () => {
+    const user = getOrCreateUser(db, 'signout@example.com', new Date());
+    const session = createSession(db, user.id, new Date()).token;
+    const res = await app.request('/auth/signout', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        cookie: `session=${session}; csrf=${authCsrf}`,
+      },
+      body: new URLSearchParams({ _csrf: authCsrf }).toString(),
+    });
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('/signin');
+    expect(db.select().from(sessions).where(eq(sessions.userId, user.id)).get()).toBeUndefined();
   });
 
   test('entering the wrong code repeatedly locks the login code', async () => {
@@ -256,7 +342,7 @@ describe('auth', () => {
     // it to https://evil.com — the validator must drop it back to "/".
     const res = await app.request('/auth/verify-code', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', cookie: `csrf=${authCsrf}`, 'x-csrf-token': authCsrf },
       body: JSON.stringify({ email, code, next: '/\\evil.com' }),
     });
     expect(res.status).toBe(200);
@@ -303,9 +389,15 @@ describe('dev fixed login code (DEV_LOGIN_CODE)', () => {
   }
 
   async function verify(app: Hono<AppEnv>, email: string, code: string) {
+    const csrfResponse = await app.request('/signin');
+    const csrf = csrfResponse.headers.getSetCookie()
+      .map((header) => header.split(';')[0])
+      .find((cookie) => cookie?.startsWith('csrf='))
+      ?.slice('csrf='.length);
+    if (!csrf) throw new Error('expected sign-in to issue a csrf cookie');
     return app.request('/auth/verify-code', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', cookie: `csrf=${csrf}`, 'x-csrf-token': csrf },
       body: JSON.stringify({ email, code }),
     });
   }
@@ -315,6 +407,18 @@ describe('dev fixed login code (DEV_LOGIN_CODE)', () => {
     const res = await verify(app, 'dev@example.com', '123456');
     expect(res.status).toBe(200);
     expect(res.headers.get('set-cookie')).toContain('session=');
+  });
+
+  test('does not let the fixed code bypass browser CSRF proof', async () => {
+    const app = buildApp('123456');
+    const res = await app.request('/auth/verify-code', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ email: 'dev@example.com', code: '123456' }).toString(),
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'invalid csrf token' });
+    expect(res.headers.get('set-cookie')).toBeNull();
   });
 
   test('still rejects disallowed domains', async () => {
