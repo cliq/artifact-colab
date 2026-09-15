@@ -4,8 +4,8 @@
  * states, and auto-watch the author; they differ only in where the anchor
  * comes from (the browser selection vs. a quote located server-side) and in
  * whether the comment is attributed to an access token. Both also subscribe
- * every teammate the body mentions (`@email`), so the mention reaches them by
- * digest.
+ * every person the author is authorized to mention (`@email`), so the mention
+ * reaches them by digest.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -107,13 +107,12 @@ export function createReply(
 }
 
 /**
- * Subscribe every teammate the body mentions, except the author (already
- * auto-watched, sticky opt-out respected). `resolveMentions` only yields people
- * who can open the document, so a mention on a private one never subscribes a
- * teammate to comments they aren't allowed to read.
+ * Subscribe every authorized person the body mentions, except the author
+ * (already auto-watched, sticky opt-out respected). `resolveMentions` enforces
+ * both the author's scoped directory and the recipient's current read access.
  */
 function watchMentioned(db: DB, document: Document, authorId: string, body: string, now: Date): void {
-  for (const user of resolveMentions(db, document, body)) {
+  for (const user of resolveMentions(db, document, authorId, body)) {
     if (user.id !== authorId) watchForMention(db, document.id, user.id, now);
   }
 }

@@ -128,17 +128,17 @@ export interface ReactionDTO {
 }
 
 /**
- * A teammate the comment body mentions as `@email`. The client paints those
- * tokens as chips showing the display name; emails the body names that don't
- * resolve to a member are not listed and stay plain text.
+ * A person the comment author was authorized to mention as `@email`. The
+ * client paints those tokens as chips showing the display name; excluded
+ * emails stay plain text.
  */
 export interface MentionDTO {
   email: string;
   name: string | null;
 }
 
-function mentionsFor(db: DB, body: string, document: Document): MentionDTO[] {
-  return resolveMentions(db, document, body).map((user) => ({ email: user.email, name: user.name }));
+function mentionsFor(db: DB, body: string, document: Document, actorId: string): MentionDTO[] {
+  return resolveMentions(db, document, actorId, body).map((user) => ({ email: user.email, name: user.name }));
 }
 
 interface ThreadReplyDTO {
@@ -242,14 +242,14 @@ export function buildThread(db: DB, comment: Comment, versionId: string | undefi
       ? { state: anchorStateRow.state, start: anchorStateRow.start, end: anchorStateRow.end }
       : null,
     reactions: reactions.get(comment.id) ?? [],
-    mentions: mentionsFor(db, comment.body, document),
+    mentions: mentionsFor(db, comment.body, document, comment.authorId),
     replies: replyRows.map((reply) => ({
       id: reply.id,
       body: reply.body,
       author: authorFor(db, reply, document.teamId),
       createdAt: reply.createdAt,
       reactions: reactions.get(reply.id) ?? [],
-      mentions: mentionsFor(db, reply.body, document),
+      mentions: mentionsFor(db, reply.body, document, reply.authorId),
     })),
   };
 }
@@ -333,18 +333,14 @@ apiRoutes.get('/api/docs/:slug/comments', (c) => {
 });
 
 /**
- * Who the `@` picker offers: the document's team members other than the
- * requester. Only members get the list — a guest on a public document can
- * comment but is not shown the team roster.
+ * Who the `@` picker offers from the requester's scoped artifact directory.
  */
 apiRoutes.get('/api/docs/:slug/mentionable', (c) => {
   const db = c.get('db');
   const user = c.get('user');
   const access = findDocumentForViewer(db, c.req.param('slug'), user.id);
   if (!access) return c.json({ error: 'not found' }, 404);
-  // Public guests cannot enumerate the team; private collaborators see only authorized people.
-  if (!access.isMember && access.document.visibility !== 'private' && !access.canPublish) return c.json({ users: [] });
-  const rows = mentionableUsers(db, access.document.id)
+  const rows = mentionableUsers(db, access.document.id, user.id)
     .filter((person) => person.id !== user.id).sort((a, b) => a.email.localeCompare(b.email));
   return c.json({
     users: rows.map((row) => ({ email: row.email, name: row.name, avatarUrl: gravatarUrl(row.email) })),
@@ -414,7 +410,7 @@ apiRoutes.post('/api/comments/:id/replies', async (c) => {
       body: reply.body,
       author: authorFor(db, reply, doc.teamId),
       createdAt: reply.createdAt,
-      mentions: mentionsFor(db, reply.body, doc),
+      mentions: mentionsFor(db, reply.body, doc, reply.authorId),
     },
     201,
   );

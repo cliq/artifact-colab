@@ -161,7 +161,7 @@ describe('private collaboration capability matrix', () => {
     setDocumentVisibility(db, doc, 'private');
     expect(resolveDocumentAccess(db, slug, people.viewer!.id)?.canComment).toBe(false);
     expect(db.select().from(watches).all()).toHaveLength(3);
-    expect(resolveMentions(db, doc, `@${people.viewer!.email} @${people.externalEditor!.email} @${people.teammate!.email}`)).toHaveLength(2);
+    expect(resolveMentions(db, doc, people.owner!.id, `@${people.viewer!.email} @${people.externalEditor!.email} @${people.teammate!.email}`)).toHaveLength(2);
   });
 
   test('ordinary membership removal preserves grants; owner removal suspends grants and prunes watches', () => {

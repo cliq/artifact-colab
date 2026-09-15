@@ -51,11 +51,16 @@ export function watchForMention(db: DBOrTx, documentId: string, userId: string, 
     .run();
 }
 
-/** Mentions resolve only within the artifact's authorized local collaborator directory. */
-export function resolveMentions(db: DBOrTx, document: Pick<Document, 'id' | 'teamId' | 'visibility' | 'createdBy'>, body: string): User[] {
+/** Mentions resolve only within the actor's authorized local collaborator directory. */
+export function resolveMentions(
+  db: DBOrTx,
+  document: Pick<Document, 'id' | 'teamId' | 'visibility' | 'createdBy'>,
+  actorId: string,
+  body: string,
+): User[] {
   const emails = extractMentionEmails(body);
   if (emails.length === 0) return [];
-  return mentionableUsers(db, document.id).filter((user) => emails.includes(user.email));
+  return mentionableUsers(db, document.id, actorId).filter((user) => emails.includes(user.email));
 }
 
 /**
@@ -92,9 +97,9 @@ export interface DigestEmail {
 
 export type DigestSender = (email: DigestEmail) => Promise<void>;
 
-/** Whether `item`'s body mentions the recipient — by `@email`. */
-function mentionsRecipient(item: Comment, recipientEmail: string): boolean {
-  return extractMentionEmails(item.body).includes(recipientEmail.toLowerCase());
+/** Whether `item` contains an authorized mention of the recipient. */
+function mentionsRecipient(db: DBOrTx, document: Document, item: Comment, recipientId: string): boolean {
+  return resolveMentions(db, document, item.authorId, item.body).some((user) => user.id === recipientId);
 }
 
 function digestText(
@@ -103,13 +108,13 @@ function digestText(
   docId: string,
   items: Comment[],
   authorEmails: Map<string, string>,
-  recipientEmail: string,
+  mentionedCommentIds: Set<string>,
 ): string {
   const lines: string[] = [`New comments on "${docTitle}":`, ''];
   for (const item of items) {
     const person = authorEmails.get(item.authorId) ?? 'someone';
     const author = item.viaTokenLabel ? `${person} (via ${item.viaTokenLabel})` : person;
-    const mentioned = mentionsRecipient(item, recipientEmail);
+    const mentioned = mentionedCommentIds.has(item.id);
     if (item.parentId === null) {
       lines.push(`${author} ${mentioned ? 'mentioned you' : 'commented'} on "${item.quotedText}":`);
     } else {
@@ -186,12 +191,15 @@ export async function runDigestSweep(db: DBOrTx, baseUrl: string, send: DigestSe
             if (email) authorEmails.set(item.authorId, email);
           }
           const count = toEmail.length;
-          const mentioned = toEmail.some((item) => mentionsRecipient(item, to));
+          const mentionedCommentIds = new Set(
+            toEmail.filter((item) => mentionsRecipient(db, doc, item, watch.userId)).map((item) => item.id),
+          );
+          const mentioned = mentionedCommentIds.size > 0;
           const email: DigestEmail = {
             to,
             documentId,
             subject: `${count} new comment${count === 1 ? '' : 's'} on "${doc.title}"${mentioned ? ' (you were mentioned)' : ''}`,
-            text: digestText(baseUrl, doc.title, doc.id, toEmail, authorEmails, to),
+            text: digestText(baseUrl, doc.title, doc.id, toEmail, authorEmails, mentionedCommentIds),
           };
           try {
             if (!resolveDocumentAccess(db, documentId, watch.userId) || !isWatching(db, documentId, watch.userId)) continue;
