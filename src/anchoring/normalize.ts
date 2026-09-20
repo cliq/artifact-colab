@@ -16,7 +16,11 @@ export const SKIP_TAGS: ReadonlySet<string> = new Set([
   'title',
   'meta',
   'link',
-  'svg',
+  // SVG labels are selectable text. Only non-rendered SVG subtrees are skipped.
+  'defs',
+  'desc',
+  'metadata',
+  'symbol',
   'canvas',
   'iframe',
   'object',
@@ -66,6 +70,9 @@ export const BLOCK_TAGS: ReadonlySet<string> = new Set([
   'pre',
   'section',
   'summary',
+  'svg',
+  // Separate independent SVG labels without splitting inline <tspan> runs.
+  'text',
   'table',
   'tbody',
   'td',

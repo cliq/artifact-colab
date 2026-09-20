@@ -496,6 +496,48 @@ test.describe('happy path', () => {
     await expect(page.locator('.thread-card', { hasText: commentBody })).toBeVisible();
   });
 
+  test('SVG flowchart labels accept comments and restore their highlights after reload', async () => {
+    const result = await callTool(page.request, pat, 'publish_artifact', {
+      title: 'SVG Flowchart',
+      html: `<!DOCTYPE html><html><body><p>Flowchart</p>
+        <svg viewBox="0 0 600 100" role="img">
+          <text x="20" y="40">POST /api/messages</text>
+          <text x="20" y="80">Assemble <tspan>turn</tspan></text>
+        </svg><p>End of chart</p></body></html>`,
+    });
+    expect(result.isError).toBeFalsy();
+    const svgSlug = extractDocumentId(result.content[0]!.text);
+    await page.goto(`/d/${svgSlug}`);
+    let frame = await getArtifactFrame(page);
+    const label = frame.locator('svg > text').first();
+    await expect(label).toBeVisible();
+    // Real browser selection, including the mouseup that opens the composer.
+    await label.dblclick();
+    const composer = page.locator('#ac-composer');
+    await expect(composer).toBeVisible();
+    // Select the full label for a predictable saved quote.
+    expect(await selectPhraseInFrame(frame, 'POST /api/messages')).toBe(true);
+    await expect(composer.locator('.thread-quote')).toHaveText('POST /api/messages');
+    await composer.locator('textarea').fill('Check this flowchart step.');
+    await composer.locator('button:has-text("Save")').click();
+    await expect(composer).toBeHidden();
+    await expect(page.locator('.thread-card', { hasText: 'Check this flowchart step.' })).toBeVisible();
+
+    await page.reload();
+    frame = await getArtifactFrame(page);
+    await expect(page.locator('.thread-card', { hasText: 'Check this flowchart step.' })).toBeVisible();
+    await expect.poll(() => frame.evaluate(() => {
+      const highlights = CSS.highlights.get('ac-open');
+      if (!highlights) return null;
+      const range = [...highlights][0] as Range | undefined;
+      return range ? {
+        text: range.toString(),
+        tag: range.startContainer.parentElement?.localName,
+        width: range.getBoundingClientRect().width,
+      } : null;
+    })).toEqual({ text: 'POST /api/messages', tag: 'text', width: expect.any(Number) });
+  });
+
   test('an artifact remembers its settings across reloads despite the opaque-origin frame', async () => {
     // The tracker writes through localStorage (via a try/catch, like Claude
     // artifacts do) and reads it back on load; sessionStorage holds a view state.

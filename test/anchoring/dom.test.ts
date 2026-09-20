@@ -132,6 +132,48 @@ describe('normalizer regression suite', () => {
   });
 });
 
+describe('SVG flowchart annotations', () => {
+  const html = `<body><p>Before chart</p><svg viewBox="0 0 600 120" role="img">
+    <title>Chart title</title><desc>Accessible description</desc>
+    <metadata>Editor data</metadata><defs><text id="unused">Unused label</text></defs>
+    <symbol id="symbol"><text>Symbol definition</text></symbol>
+    <text x="10" y="30">POST /api/messages</text><text x="10" y="60">Assemble <tspan>turn</tspan></text>
+    <text hidden>Hidden label</text><g aria-hidden="true"><text>Decoration</text></g>
+    <foreignObject x="0" y="80" width="600" height="40"><div xmlns="http://www.w3.org/1999/xhtml">HTML label</div></foreignObject>
+  </svg><p>After chart</p></body>`;
+
+  test('indexes visible labels with separators in both DOM implementations', () => {
+    const expected = 'Before chart POST /api/messages Assemble turn HTML label After chart';
+    expect(indexHtml(html).text).toBe(expected);
+    expect(indexHtmlBrowser(html).text).toBe(expected);
+  });
+
+  test('SVG selections create anchors that resolve on the server and back to a DOM range', () => {
+    const doc = browserDoc(html);
+    const text = doc.querySelector('svg > text')!.firstChild!;
+    const selection = doc.createRange();
+    selection.setStart(text, 5);
+    selection.setEnd(text, 18);
+    const anchor = describeAnchor(doc, selection);
+    expect(anchor?.exact).toBe('/api/messages');
+    const serverIndex = indexHtml(html);
+    const located = locateTextAnchor(serverIndex.text, anchor!);
+    expect(located).not.toBeNull();
+    expect(serverIndex.text.slice(located!.start, located!.end)).toBe('/api/messages');
+    const restored = locateAnchor(doc, anchor!);
+    expect(restored?.startContainer).toBe(text);
+    expect(restored?.toString()).toBe('/api/messages');
+  });
+
+  test('existing prose anchors still resolve after SVG labels enter the index', () => {
+    const doc = browserDoc(html);
+    const legacy = buildTextIndex(doc, { extraSkipTags: ['svg'] });
+    const start = legacy.text.indexOf('After chart');
+    const anchor = describeTextAnchor(legacy.text, start, start + 11);
+    expect(locateAnchor(doc, anchor)?.toString()).toBe('After chart');
+  });
+});
+
 describe('offset mapping identity (the big one)', () => {
   for (const name of FIXTURES) {
     test(`domToTextOffset ∘ textOffsetToDom === id for every offset in ${name}`, () => {
