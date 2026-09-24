@@ -24,8 +24,15 @@ describe('relinkAssets', () => {
     expect(relinkAssets(html, [...docAssets].reverse())).toBe(expected);
   });
 
+  test('rewrites links to an asset, such as a thumbnail opening the full-size image', () => {
+    const html = `<a href="shots/a.png" target="_blank"><img src="shots/a.png"></a><a href='shots/a.png'>x</a>`;
+    expect(relinkAssets(html, [asset('shots/a.png')])).toBe(
+      `<a href="assets/shots/a.png" target="_blank"><img src="assets/shots/a.png"></a><a href='assets/shots/a.png'>x</a>`,
+    );
+  });
+
   test('leaves unrelated and partially matching references alone', () => {
-    const html = `<img src="other.png"><img src="a.png.bak"><a href="a.png">x</a>`;
+    const html = `<img src="other.png"><img src="a.png.bak"><a href="other.png">x</a><a href="https://example.com/a.png">y</a>`;
     expect(relinkAssets(html, [asset('a.png')])).toBe(html);
   });
 });

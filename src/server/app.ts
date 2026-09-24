@@ -13,6 +13,7 @@ import type { DB } from './db/index.js';
 import { mcpRoutes } from './mcp.js';
 import { csrfProtect, sessionAuth } from './middleware.js';
 import { adminRoutes } from './routes/admin.js';
+import { assetFileRoutes } from './routes/assetFiles.js';
 import { apiRoutes } from './routes/api.js';
 import { authRoutes } from './routes/auth.js';
 import { collaborationRoutes } from './routes/collaboration.js';
@@ -76,6 +77,8 @@ export function createApp(deps: { db: DB; config: Config }): Hono<AppEnv> {
   app.use('/d/*', sessionAuth({ redirect: true }));
   app.route('/', frameRoutes);
   app.route('/', documentRoutes);
+  // Last among /d/* so a named document route always wins over an asset path.
+  app.route('/', assetFileRoutes);
 
   // Admin area (/admin) + team settings (/teams/:id/settings) — session-authed
   // inside, 404s for anyone not authorized to see them.

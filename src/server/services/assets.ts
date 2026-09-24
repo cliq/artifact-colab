@@ -2,7 +2,8 @@
  * Document assets (screenshots etc.) uploaded alongside publish_artifact.
  *
  * Assets are stored per document and inlined into the artifact HTML as data:
- * URIs when the frame is served. The sandboxed frame has an opaque origin and
+ * URIs when the frame is served (links to them open `/d/:slug/<name>`, see
+ * routes/assetFiles.ts). The sandboxed frame has an opaque origin and
  * sends no cookies, so a session-authed asset URL could never work from
  * inside it — serve-time inlining keeps the stored HTML small and sidesteps
  * auth entirely (the frame CSP already allows img-src data:).
@@ -80,8 +81,9 @@ const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\
 /**
  * Point references to uploaded assets at files under `assets/` instead of
  * inlining them — used by the zip export, where the images ship next to
- * `index.html` / `source.md`. Covers src="name", src='name', CSS url(name)
- * in any quoting, and Markdown `](name)` links.
+ * `index.html` / `source.md`. Covers src="name", src='name', href="name"
+ * (e.g. a link to the full-size image), CSS url(name) in any quoting, and
+ * Markdown `](name)` links.
  *
  * All names are matched in one pass so a rewrite never feeds a later one:
  * with both `logo.png` and `assets/logo.png` uploaded, `logo.png` must not
@@ -90,7 +92,7 @@ const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\
 export function relinkAssets(source: string, docAssets: Asset[]): string {
   if (docAssets.length === 0) return source;
   const names = [...new Set(docAssets.map((a) => a.name))].sort((a, b) => b.length - a.length).map(escapeRegExp).join('|');
-  const pattern = new RegExp(`(src=|url\\(|\\]\\()(["']?)(${names})(\\2)(?=[)>/\\s]|$)`, 'g');
+  const pattern = new RegExp(`(src=|href=|url\\(|\\]\\()(["']?)(${names})(\\2)(?=[)>/\\s]|$)`, 'g');
   return source.replace(pattern, (_m, prefix: string, quote: string, name: string) => `${prefix}${quote}assets/${name}${quote}`);
 }
 
