@@ -1,0 +1,1 @@
+ALTER TABLE `comments` ADD `edited_at` integer;

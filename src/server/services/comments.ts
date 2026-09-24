@@ -5,7 +5,8 @@
  * comes from (the browser selection vs. a quote located server-side) and in
  * whether the comment is attributed to an access token. Both also subscribe
  * every person the author is authorized to mention (`@email`), so the mention
- * reaches them by digest.
+ * reaches them by digest. Authors can later edit the body of their own
+ * comments and replies.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -104,6 +105,21 @@ export function createReply(
   const created = db.select().from(comments).where(eq(comments.id, id)).get();
   if (!created) throw new Error(`reply ${id} vanished after insert`);
   return created;
+}
+
+/**
+ * Replace a comment's or reply's body, as its author. Anchor, status and
+ * attribution stay put; only people newly mentioned by the edit get
+ * subscribed (the watch is idempotent for everyone already mentioned).
+ */
+export function editComment(db: DB, input: { comment: Comment; document: Document; body: string; now?: Date }): Comment {
+  const now = input.now ?? new Date();
+  db.update(comments).set({ body: input.body, editedAt: now }).where(eq(comments.id, input.comment.id)).run();
+  watchMentioned(db, input.document, input.comment.authorId, input.body, now);
+
+  const updated = db.select().from(comments).where(eq(comments.id, input.comment.id)).get();
+  if (!updated) throw new Error(`comment ${input.comment.id} vanished after edit`);
+  return updated;
 }
 
 /**

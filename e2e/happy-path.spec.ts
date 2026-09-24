@@ -192,6 +192,32 @@ test.describe('happy path', () => {
     await page.locator('main h1').click();
   });
 
+  test('the author edits their reply in place; Escape cancels an edit', async () => {
+    const card = page.locator('.thread-card', { hasText: commentBody });
+    await card.click();
+    const reply = card.locator('.reply', { hasText: 'first line' });
+
+    await reply.locator('.meta-action:has-text("Edit")').click();
+    // While editing, the reply's text lives in the textarea's value, so find it from the card.
+    const editor = card.locator('textarea[data-edit-for]');
+    await expect(editor).toBeFocused();
+    await expect(editor).toHaveValue('first line\nsecond line\nthird line');
+    await page.keyboard.type(' (typo fixed)');
+    await page.keyboard.press('Escape');
+    await expect(editor).toHaveCount(0);
+    await expect(reply.locator('.reply-body')).toHaveText('first line\nsecond line\nthird line');
+
+    await reply.locator('.meta-action:has-text("Edit")').click();
+    await editor.fill('first line, edited');
+    await page.keyboard.press('Enter');
+    const edited = card.locator('.reply', { hasText: 'first line, edited' });
+    await expect(edited.locator('.reply-body')).toHaveText('first line, edited');
+    await expect(edited.locator('.thread-meta')).toContainText('edited');
+    await expect(editor).toHaveCount(0);
+
+    await page.locator('main h1').click();
+  });
+
   test('clicking the reply textarea keeps focus and preserves the draft', async () => {
     const card = page.locator('.thread-card', { hasText: commentBody });
     await card.click();

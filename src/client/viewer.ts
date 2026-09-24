@@ -79,6 +79,7 @@ interface ReplyDTO {
   body: string;
   author: AuthorDTO;
   createdAt: string;
+  editedAt: string | null;
   reactions: ReactionDTO[];
   /** Teammates the body mentions as `@email`; painted as chips. */
   mentions: MentionDTO[];
@@ -98,6 +99,7 @@ interface ThreadDTO {
   status: 'open' | 'resolved';
   author: AuthorDTO;
   createdAt: string;
+  editedAt: string | null;
   createdVersionId: string;
   resolvedAt: string | null;
   resolvedBy: string | null;
@@ -147,6 +149,13 @@ const SIDEBAR_CSS = `
 .thread-meta .author { font-weight: 600; color: var(--color-ink); }
 .thread-meta .avatar { width: 16px; height: 16px; border-radius: 50%; flex: none; }
 .thread-body { margin-bottom: 6px; white-space: pre-wrap; word-break: break-word; }
+.thread-meta .edited { cursor: default; }
+.thread-meta .meta-action { font: inherit; font-size: 11px; margin-left: auto; padding: 0; border: none; background: transparent; color: var(--color-muted); cursor: pointer; }
+.thread-meta .meta-action:hover { color: var(--color-accent); text-decoration: underline; }
+.thread-card.collapsed .meta-action, .thread-card.stub .edit-form { display: none; }
+.edit-form { margin: 2px 0 6px; }
+.edit-form textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 4px 6px; border: 1px solid var(--color-rule-2); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text); resize: vertical; min-height: 48px; }
+.edit-form .composer-actions { margin-top: 4px; }
 .reactions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 4px 0 2px; }
 .reaction-chip { font: inherit; font-size: 12px; line-height: 1; padding: 3px 7px; border: 1px solid var(--color-border); border-radius: var(--radius-pill); background: var(--color-surface); color: var(--color-ink-2); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
 .reaction-chip:hover { border-color: var(--color-rule-2); }
@@ -213,8 +222,11 @@ function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-/** Gravatar + display name (profile name when set, email otherwise) + guest badge + relative time. */
-function authorMeta(author: AuthorDTO, createdAt: string): HTMLElement {
+/**
+ * Gravatar + display name (profile name when set, email otherwise) + guest
+ * badge + relative time, an "edited" marker, and the author's Edit action.
+ */
+function authorMeta(author: AuthorDTO, createdAt: string, editedAt: string | null, onEdit: (() => void) | null): HTMLElement {
   const parts: (Node | string)[] = [
     el('img', {
       className: 'avatar',
@@ -240,6 +252,22 @@ function authorMeta(author: AuthorDTO, createdAt: string): HTMLElement {
     );
   }
   parts.push(document.createTextNode(` · ${formatTime(createdAt)}`));
+  if (editedAt) {
+    parts.push(el('span', { className: 'edited', text: '· edited', attrs: { title: `Edited ${new Date(editedAt).toLocaleString()}` } }));
+  }
+  if (onEdit) {
+    parts.push(
+      el('button', {
+        className: 'meta-action',
+        text: 'Edit',
+        attrs: { type: 'button' },
+        onClick: (e) => {
+          e.stopPropagation();
+          onEdit();
+        },
+      }),
+    );
+  }
   return el('div', { className: 'thread-meta' }, parts);
 }
 
@@ -667,6 +695,8 @@ function init(): void {
   const liveStates = new Map<string, AnchorState>();
   /** In-progress reply text per thread, so re-renders don't lose typing. */
   const replyDrafts = new Map<string, string>();
+  /** The comment or reply the viewer is editing, with its in-progress text (survives re-renders). */
+  let editing: { id: string; draft: string } | null = null;
   let focusedCommentId: string | null = null;
   let pendingAnchor: TextAnchor | null = null;
   let pendingQuotedText = '';
@@ -754,7 +784,7 @@ function init(): void {
   }
 
   // --- networking -------------------------------------------------------
-  async function sendJson(method: 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<{ ok: boolean; status: number }> {
+  async function sendJson(method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<{ ok: boolean; status: number }> {
     const res = await fetch(path, {
       method,
       headers: { 'content-type': 'application/json', 'x-csrf-token': data.csrfToken },
@@ -948,6 +978,88 @@ function init(): void {
     clearFocus();
   });
 
+  // --- editing ------------------------------------------------------
+  /** The Edit action for the viewer's own comments and replies; null for everyone else's. */
+  function editAction(id: string, author: AuthorDTO, body: string): (() => void) | null {
+    if (!data.access.canComment || author.email.toLowerCase() !== data.userEmail.toLowerCase()) return null;
+    if (editing?.id === id) return null;
+    return () => {
+      editing = { id, draft: body };
+      renderThreads();
+      const textarea = threadsEl.querySelector<HTMLTextAreaElement>(`textarea[data-edit-for="${id}"]`);
+      if (textarea) {
+        textarea.focus();
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      }
+    };
+  }
+
+  function cancelEdit(): void {
+    editing = null;
+    renderThreads();
+  }
+
+  /** A comment or reply body, or — while the viewer edits it — a textarea with Save/Cancel. */
+  function editableBody(id: string, body: string, mentions: MentionDTO[], className: string): HTMLElement {
+    if (editing?.id !== id) return el('div', { className }, renderMentionBody(body, mentions));
+
+    const error = el('div', { className: 'ac-error' });
+    const textarea = el('textarea', { attrs: { 'data-edit-for': id, title: `${NEWLINE_HINT} · Esc to cancel` } });
+    textarea.value = editing.draft;
+    textarea.addEventListener('input', () => {
+      if (editing?.id === id) editing.draft = textarea.value;
+    });
+    textarea.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || textarea.hasAttribute(MENTION_OPEN_ATTR)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      cancelEdit();
+    });
+    textarea.addEventListener('click', (e) => e.stopPropagation());
+    mentionPicker.attach(textarea);
+
+    async function save(): Promise<void> {
+      const value = textarea.value.trim();
+      if (!value) return;
+      if (value === body.trim()) return cancelEdit();
+      const res = await sendJson('PATCH', `/api/comments/${id}`, { body: value });
+      if (res.ok) {
+        editing = null;
+        await fetchComments();
+        // An unchanged payload skips the re-render; leave edit mode regardless.
+        renderThreads();
+      } else {
+        error.textContent = 'Could not save changes.';
+      }
+    }
+    submitOnEnter(textarea, () => void save());
+
+    return el('div', { className: 'edit-form' }, [
+      textarea,
+      error,
+      el('div', { className: 'composer-actions' }, [
+        el('button', {
+          className: 'ac-btn',
+          text: 'Cancel',
+          attrs: { type: 'button' },
+          onClick: (e) => {
+            e.stopPropagation();
+            cancelEdit();
+          },
+        }),
+        el('button', {
+          className: 'ac-btn ac-btn-primary',
+          text: 'Save',
+          attrs: { type: 'button' },
+          onClick: (e) => {
+            e.stopPropagation();
+            void save();
+          },
+        }),
+      ]),
+    ]);
+  }
+
   function buildThreadCard(thread: ThreadDTO): HTMLElement {
     const state = effectiveState(thread);
     const badges = el('div', { className: 'thread-badges' });
@@ -968,7 +1080,7 @@ function init(): void {
       },
     });
 
-    const meta = authorMeta(thread.author, thread.createdAt);
+    const meta = authorMeta(thread.author, thread.createdAt, thread.editedAt, editAction(thread.id, thread.author, thread.body));
     const resolvedMeta =
       thread.status === 'resolved'
         ? el('div', {
@@ -977,15 +1089,15 @@ function init(): void {
           })
         : null;
 
-    const body = el('div', { className: 'thread-body' }, renderMentionBody(thread.body, thread.mentions ?? []));
+    const body = editableBody(thread.id, thread.body, thread.mentions ?? [], 'thread-body');
     const reactions = reactionsBar(thread.id, thread.reactions);
 
     const repliesEl = el('div', { className: 'replies' });
     for (const reply of thread.replies) {
       repliesEl.appendChild(
         el('div', { className: 'reply' }, [
-          authorMeta(reply.author, reply.createdAt),
-          el('div', { className: 'reply-body' }, renderMentionBody(reply.body, reply.mentions ?? [])),
+          authorMeta(reply.author, reply.createdAt, reply.editedAt, editAction(reply.id, reply.author, reply.body)),
+          editableBody(reply.id, reply.body, reply.mentions ?? [], 'reply-body'),
           reactionsBar(reply.id, reply.reactions),
         ]),
       );
@@ -1124,11 +1236,13 @@ function init(): void {
     typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => alignCards());
 
   function renderThreads(): void {
-    // Rebuilding replaces every node; if the user is typing a reply, carry
+    // Rebuilding replaces every node; if the user is typing a reply or edit, carry
     // focus and caret over to the replacement textarea.
     const active = document.activeElement;
     const activeReplyId =
       active instanceof HTMLTextAreaElement ? active.getAttribute('data-reply-for') : null;
+    const activeEditId =
+      active instanceof HTMLTextAreaElement ? active.getAttribute('data-edit-for') : null;
     const caret = active instanceof HTMLTextAreaElement
       ? { start: active.selectionStart, end: active.selectionEnd }
       : null;
@@ -1176,9 +1290,9 @@ function init(): void {
     if (prevButton) prevButton.disabled = shown.length === 0;
     if (nextButton) nextButton.disabled = shown.length === 0;
 
-    if (activeReplyId) {
+    if (activeReplyId || activeEditId) {
       const replacement = threadsEl.querySelector<HTMLTextAreaElement>(
-        `textarea[data-reply-for="${activeReplyId}"]`,
+        activeReplyId ? `textarea[data-reply-for="${activeReplyId}"]` : `textarea[data-edit-for="${activeEditId}"]`,
       );
       if (replacement) {
         replacement.focus();

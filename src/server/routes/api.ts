@@ -15,7 +15,7 @@ import { comments, commentAnchorStates, commentReactions, documents, teamMembers
 import { isReactionEmoji, REACTION_EMOJIS } from '../../shared/reactions.js';
 import { resolveDocumentAccess, mentionableUsers, type DocumentAccess } from '../services/access.js';
 import { assetsForDocument, relinkAssets, stripBaseHref } from '../services/assets.js';
-import { createReply, createThreadComment } from '../services/comments.js';
+import { createReply, createThreadComment, editComment } from '../services/comments.js';
 import { gravatarUrl } from '../services/gravatar.js';
 import { getProjectForUser } from '../services/projects.js';
 import { resolveMentions } from '../services/watches.js';
@@ -38,6 +38,8 @@ const createCommentSchema = z.object({
 });
 
 const replySchema = z.object({ body: z.string().min(1).max(10000) });
+
+const editSchema = z.object({ body: z.string().trim().min(1).max(10000) });
 
 async function readJson(c: Context<AppEnv>): Promise<unknown> {
   try {
@@ -146,6 +148,8 @@ interface ThreadReplyDTO {
   body: string;
   author: AuthorDTO;
   createdAt: Date;
+  /** Last time the author edited the body; null when never edited. */
+  editedAt: Date | null;
   reactions: ReactionDTO[];
   mentions: MentionDTO[];
 }
@@ -202,6 +206,8 @@ export interface ThreadDTO {
   status: string;
   author: AuthorDTO;
   createdAt: Date;
+  /** Last time the author edited the body; null when never edited. */
+  editedAt: Date | null;
   createdVersionId: string;
   resolvedAt: Date | null;
   resolvedBy: string | null;
@@ -235,6 +241,7 @@ export function buildThread(db: DB, comment: Comment, versionId: string | undefi
     status: comment.status,
     author: authorFor(db, comment, document.teamId),
     createdAt: comment.createdAt,
+    editedAt: comment.editedAt,
     createdVersionId: comment.createdVersionId,
     resolvedAt: comment.resolvedAt,
     resolvedBy: emailFor(db, comment.resolvedBy),
@@ -248,6 +255,7 @@ export function buildThread(db: DB, comment: Comment, versionId: string | undefi
       body: reply.body,
       author: authorFor(db, reply, document.teamId),
       createdAt: reply.createdAt,
+      editedAt: reply.editedAt,
       reactions: reactions.get(reply.id) ?? [],
       mentions: mentionsFor(db, reply.body, document, reply.authorId),
     })),
@@ -414,6 +422,31 @@ apiRoutes.post('/api/comments/:id/replies', async (c) => {
     },
     201,
   );
+});
+
+/**
+ * Edit a comment's or reply's body. Only its author may, and only while they
+ * can still comment on the document. The response is the refreshed thread.
+ */
+apiRoutes.patch('/api/comments/:id', async (c) => {
+  const db = c.get('db');
+  const user = c.get('user');
+
+  // Body first, access second — same revocation-race guard as comment create.
+  const parsed = editSchema.safeParse(await readJson(c));
+
+  const comment = db.select().from(comments).where(eq(comments.id, c.req.param('id'))).get();
+  if (!comment) return c.json({ error: 'not found' }, 404);
+  const doc = findDocumentForViewer(db, comment.documentId, user.id)?.document;
+  if (!doc) return c.json({ error: 'not found' }, 404);
+  if (!resolveDocumentAccess(db, doc.id, user.id)?.canComment) return c.json({ error: 'editor permission required' }, 403);
+  if (comment.authorId !== user.id) return c.json({ error: 'only the author can edit a comment' }, 403);
+  if (!parsed.success) return c.json({ error: 'invalid comment' }, 400);
+
+  const edited = editComment(db, { comment, document: doc, body: parsed.data.body });
+  const thread = edited.parentId ? db.select().from(comments).where(eq(comments.id, edited.parentId)).get() : edited;
+  if (!thread) return c.json({ error: 'internal error' }, 500);
+  return c.json(buildThread(db, thread, doc.currentVersionId ?? undefined, doc, user.id));
 });
 
 apiRoutes.post('/api/comments/:id/resolve', async (c) => {

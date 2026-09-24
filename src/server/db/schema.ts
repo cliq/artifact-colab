@@ -325,6 +325,8 @@ export const comments = sqliteTable(
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     resolvedAt: integer('resolved_at', { mode: 'timestamp_ms' }),
     resolvedBy: text('resolved_by'),
+    /** Last time the author changed the body; null when never edited. */
+    editedAt: integer('edited_at', { mode: 'timestamp_ms' }),
     /**
      * Set when the comment was posted through the MCP endpoint: the access
      * token that authenticated the call. The label is a snapshot (no FK) so
