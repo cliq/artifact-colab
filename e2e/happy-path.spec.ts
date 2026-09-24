@@ -167,7 +167,7 @@ test.describe('happy path', () => {
     await expect(openCard.locator('button:has-text("Resolve")')).toBeVisible();
   });
 
-  test('Enter sends a reply, Shift+Enter makes a line break', async () => {
+  test('Enter sends a reply, Shift+Enter and Option+Enter make line breaks', async () => {
     const card = page.locator('.thread-card', { hasText: commentBody });
     await card.click();
     const textarea = card.locator('.reply-form textarea');
@@ -177,12 +177,15 @@ test.describe('happy path', () => {
     await page.keyboard.press('Shift+Enter');
     await page.keyboard.type('second line');
     await expect(textarea).toHaveValue('first line\nsecond line');
+    await page.keyboard.press('Alt+Enter');
+    await page.keyboard.type('third line');
+    await expect(textarea).toHaveValue('first line\nsecond line\nthird line');
 
     await page.keyboard.press('Enter');
     const reply = card.locator('.reply', { hasText: 'first line' });
     await expect(reply).toBeVisible();
     // The break must survive storage and render as an actual line break.
-    await expect(reply.locator('.reply-body')).toHaveText('first line\nsecond line');
+    await expect(reply.locator('.reply-body')).toHaveText('first line\nsecond line\nthird line');
     await expect(textarea).toHaveValue('');
 
     // Deselect the thread for the later highlight-color assertions.

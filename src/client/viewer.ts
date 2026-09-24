@@ -243,13 +243,20 @@ function authorMeta(author: AuthorDTO, createdAt: string): HTMLElement {
   return el('div', { className: 'thread-meta' }, parts);
 }
 
-const NEWLINE_HINT = 'Enter to send · Shift+Enter for a line break';
+const NEWLINE_HINT = 'Enter to send · Shift+Enter or Option/Alt+Enter for a line break';
 
 /** Slack-style submit: Enter sends, Shift/Alt+Enter inserts a line break. While the @ picker is open, Enter picks instead. */
 function submitOnEnter(textarea: HTMLTextAreaElement, submit: () => void): void {
   textarea.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing) return;
-    if (e.shiftKey || e.altKey) return;
+    if (e.altKey) {
+      // Option+Enter has no native newline behavior in some browsers.
+      e.preventDefault();
+      textarea.setRangeText('\n', textarea.selectionStart, textarea.selectionEnd, 'end');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      return;
+    }
+    if (e.shiftKey) return;
     if (textarea.hasAttribute(MENTION_OPEN_ATTR)) return;
     e.preventDefault();
     submit();
