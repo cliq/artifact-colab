@@ -184,8 +184,8 @@ test.describe('happy path', () => {
     await page.keyboard.press('Enter');
     const reply = card.locator('.reply', { hasText: 'first line' });
     await expect(reply).toBeVisible();
-    // The break must survive storage and render as an actual line break.
-    await expect(reply.locator('.reply-body')).toHaveText('first line\nsecond line\nthird line');
+    // The break must survive storage and render as an actual line break (a <br>, so compare innerText).
+    await expect(reply.locator('.reply-body')).toHaveText('first line\nsecond line\nthird line', { useInnerText: true });
     await expect(textarea).toHaveValue('');
 
     // Deselect the thread for the later highlight-color assertions.
@@ -205,7 +205,7 @@ test.describe('happy path', () => {
     await page.keyboard.type(' (typo fixed)');
     await page.keyboard.press('Escape');
     await expect(editor).toHaveCount(0);
-    await expect(reply.locator('.reply-body')).toHaveText('first line\nsecond line\nthird line');
+    await expect(reply.locator('.reply-body')).toHaveText('first line\nsecond line\nthird line', { useInnerText: true });
 
     await reply.locator('.meta-action:has-text("Edit")').click();
     await editor.fill('first line, edited');
