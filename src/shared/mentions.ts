@@ -22,26 +22,3 @@ export function extractMentionEmails(body: string): string[] {
   }
   return [...seen];
 }
-
-export type MentionSegment = { type: 'text'; text: string } | { type: 'mention'; email: string };
-
-/**
- * Split `body` into text runs and mentions, keeping only mentions whose
- * (lowercased) email is in `known` — an `@` in front of a stranger's email
- * stays plain text. Every character of `body` lands in exactly one segment.
- */
-export function splitMentions(body: string, known: ReadonlySet<string>): MentionSegment[] {
-  const segments: MentionSegment[] = [];
-  let cursor = 0;
-  for (const match of body.matchAll(MENTION_RE)) {
-    const email = match[2]!;
-    if (!known.has(email.toLowerCase())) continue;
-    // The match includes the one-character lead-in (or nothing at line start).
-    const start = match.index! + match[1]!.length;
-    if (start > cursor) segments.push({ type: 'text', text: body.slice(cursor, start) });
-    segments.push({ type: 'mention', email });
-    cursor = start + 1 + email.length;
-  }
-  if (cursor < body.length) segments.push({ type: 'text', text: body.slice(cursor) });
-  return segments;
-}

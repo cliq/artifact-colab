@@ -12,7 +12,8 @@ import { AnnotatorBridge } from './bridge.js';
 import { initCompare } from './compare.js';
 import { FrameScaler } from './frameScale.js';
 import { loadFrame, persistFrameStorage } from './frameStorage.js';
-import { MENTION_CSS, MENTION_OPEN_ATTR, MentionPicker, renderMentionBody, type Mentionable, type MentionDTO } from './mentions.js';
+import { COMMENT_MARKDOWN_CSS, renderCommentBody } from './commentMarkdown.js';
+import { MENTION_CSS, MENTION_OPEN_ATTR, MentionPicker, type Mentionable, type MentionDTO } from './mentions.js';
 import { initMovePickers, showStoredProjectFeedback } from './projectPicker.js';
 import { initSidebarCollapse } from './sidebarCollapse.js';
 
@@ -148,7 +149,7 @@ const SIDEBAR_CSS = `
 .thread-meta { font-size: 11px; color: var(--color-muted); margin-bottom: 4px; display: flex; align-items: center; gap: 5px; }
 .thread-meta .author { font-weight: 600; color: var(--color-ink); }
 .thread-meta .avatar { width: 16px; height: 16px; border-radius: 50%; flex: none; }
-.thread-body { margin-bottom: 6px; white-space: pre-wrap; word-break: break-word; }
+.thread-body { margin-bottom: 6px; word-break: break-word; }
 .thread-meta .edited { cursor: default; }
 .thread-meta .meta-action { font: inherit; font-size: 11px; margin-left: auto; padding: 0; border: none; background: transparent; color: var(--color-muted); cursor: pointer; }
 .thread-meta .meta-action:hover { color: var(--color-accent); text-decoration: underline; }
@@ -171,7 +172,7 @@ const SIDEBAR_CSS = `
 .thread-card.collapsed .reaction-add, .thread-card.collapsed .reaction-palette, .thread-card.stub .reactions { display: none; }
 .replies { margin: 6px 0 6px 8px; border-left: 1px solid var(--color-border); padding-left: 8px; }
 .reply { margin-bottom: 6px; }
-.reply-body { white-space: pre-wrap; word-break: break-word; }
+.reply-body { word-break: break-word; }
 .reply-form { display: flex; align-items: flex-end; gap: 6px; margin-top: 6px; }
 .reply-form textarea { flex: 1; font: inherit; font-size: 12px; padding: 4px 6px; border: 1px solid var(--color-rule-2); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text); resize: vertical; min-height: 28px; }
 .thread-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
@@ -271,7 +272,7 @@ function authorMeta(author: AuthorDTO, createdAt: string, editedAt: string | nul
   return el('div', { className: 'thread-meta' }, parts);
 }
 
-const NEWLINE_HINT = 'Enter to send · Shift+Enter or Option/Alt+Enter for a line break';
+const NEWLINE_HINT = 'Enter to send · Shift+Enter or Option/Alt+Enter for a line break · Markdown supported';
 
 /** Slack-style submit: Enter sends, Shift/Alt+Enter inserts a line break. While the @ picker is open, Enter picks instead. */
 function submitOnEnter(textarea: HTMLTextAreaElement, submit: () => void): void {
@@ -306,7 +307,7 @@ function formatTime(iso: string): string {
 function injectStyles(): void {
   const style = document.createElement('style');
   style.setAttribute('data-artifact-viewer', '');
-  style.textContent = SIDEBAR_CSS + MENTION_CSS;
+  style.textContent = SIDEBAR_CSS + MENTION_CSS + COMMENT_MARKDOWN_CSS;
   document.head.appendChild(style);
 }
 
@@ -1001,7 +1002,7 @@ function init(): void {
 
   /** A comment or reply body, or — while the viewer edits it — a textarea with Save/Cancel. */
   function editableBody(id: string, body: string, mentions: MentionDTO[], className: string): HTMLElement {
-    if (editing?.id !== id) return el('div', { className }, renderMentionBody(body, mentions));
+    if (editing?.id !== id) return el('div', { className: `${className} md-body` }, renderCommentBody(body, mentions));
 
     const error = el('div', { className: 'ac-error' });
     const textarea = el('textarea', { attrs: { 'data-edit-for': id, title: `${NEWLINE_HINT} · Esc to cancel` } });

@@ -6,8 +6,6 @@
  * page; it is positioned under whichever one is being typed in.
  */
 
-import { splitMentions } from '../shared/mentions.js';
-
 export interface Mentionable {
   email: string;
   name: string | null;
@@ -212,23 +210,6 @@ export class MentionPicker {
     this.root.style.top = `${top}px`;
     this.root.style.width = `${rect.width}px`;
   }
-}
-
-/**
- * The comment body as DOM: plain text with each resolved `@email` painted as
- * a chip showing the person's display name (hover reveals the email).
- */
-export function renderMentionBody(body: string, mentions: MentionDTO[]): (Node | string)[] {
-  const byEmail = new Map(mentions.map((m) => [m.email.toLowerCase(), m]));
-  return splitMentions(body, new Set(byEmail.keys())).map((segment) => {
-    if (segment.type === 'text') return segment.text;
-    const mention = byEmail.get(segment.email.toLowerCase())!;
-    const chip = document.createElement('span');
-    chip.className = 'mention';
-    chip.title = mention.email;
-    chip.textContent = `@${mention.name ?? mention.email}`;
-    return chip;
-  });
 }
 
 export const MENTION_CSS = `

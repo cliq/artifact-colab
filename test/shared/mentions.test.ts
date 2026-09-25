@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { extractMentionEmails, splitMentions } from '../../src/shared/mentions.js';
+import { extractMentionEmails } from '../../src/shared/mentions.js';
 
 describe('mentions', () => {
   test('extracts @email tokens, lowercased and deduplicated, in order', () => {
@@ -18,27 +18,5 @@ describe('mentions', () => {
   test('trailing punctuation is not part of the address', () => {
     expect(extractMentionEmails('thanks @bob@example.com.')).toEqual(['bob@example.com']);
     expect(extractMentionEmails('ok, @bob@example.com, go')).toEqual(['bob@example.com']);
-  });
-
-  test('splitMentions keeps every character and only chips known addresses', () => {
-    const known = new Set(['bob@example.com']);
-    const body = 'cc @bob@example.com and @nobody@else.org.';
-    const segments = splitMentions(body, known);
-    expect(segments).toEqual([
-      { type: 'text', text: 'cc ' },
-      { type: 'mention', email: 'bob@example.com' },
-      { type: 'text', text: ' and @nobody@else.org.' },
-    ]);
-    const rebuilt = segments.map((s) => (s.type === 'text' ? s.text : `@${s.email}`)).join('');
-    expect(rebuilt).toBe(body);
-  });
-
-  test('splitMentions handles a mention at the very start and end', () => {
-    const known = new Set(['bob@example.com']);
-    expect(splitMentions('@bob@example.com', known)).toEqual([{ type: 'mention', email: 'bob@example.com' }]);
-    expect(splitMentions('hi @bob@example.com', known)).toEqual([
-      { type: 'text', text: 'hi ' },
-      { type: 'mention', email: 'bob@example.com' },
-    ]);
   });
 });
