@@ -164,11 +164,14 @@ function start(): void {
   function reportLayout(): void {
     if (!token) return;
     // scrollWidth exceeds the viewport exactly when the artifact's content
-    // doesn't fit the frame — the parent uses this to scale-to-fit.
-    const contentWidth = Math.ceil(
-      Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth ?? 0),
-    );
-    post({ token, type: 'layout', contentWidth });
+    // doesn't fit the frame — the parent uses this to scale-to-fit. A page
+    // that fits reports the viewport width instead, which the parent would
+    // keep as the page's natural width and scale (not reflow) on shrinking,
+    // so only real overflow is reported.
+    const doc = document.documentElement;
+    const scrollWidth = Math.max(doc.scrollWidth, document.body?.scrollWidth ?? 0);
+    if (scrollWidth <= doc.clientWidth) return;
+    post({ token, type: 'layout', contentWidth: Math.ceil(scrollWidth) });
   }
 
   let positionsFrame: number | undefined;
