@@ -107,13 +107,16 @@ Use the same configured `DEV_LOGIN_CODE` for these demo emails, or read their si
 
 ## Good to know
 
-- Connected agents get eight MCP tools: `publish_artifact`, `get_artifact`, `list_projects`, `move_artifact`,
-  `get_comments`, `add_comment`, `resolve_comment`, and `delete_artifact` — enough to publish and organize a page,
-  fetch it back, read the team's feedback, join
-  the discussion (open a thread on a quoted passage or reply to one), close out addressed threads, and clean up.
+- Connected agents get nine MCP tools: `publish_artifact`, `get_artifact`, `list_projects`, `move_artifact`,
+  `get_comments`, `add_comment`, `edit_comment`, `resolve_comment`, and `delete_artifact` — enough to publish and
+  organize a page, fetch it back, read the team's feedback, join
+  the discussion (open a thread on a quoted passage or reply to one), fix their own comments, close out addressed
+  threads, and clean up.
 - Comments an agent posts through MCP are attributed to the token's owner with an "agent" badge naming the access
   token, so a review from Claude Code and one from a second reader model stay distinguishable in the sidebar and in
-  the digest emails.
+  the digest emails. Agents can edit only the comments they posted this way, never what their owner typed.
+- Comment bodies are Markdown (GFM), whether typed in the sidebar or posted by an agent. Raw HTML stays literal
+  text and images show as links.
 - You automatically watch every artifact you publish or comment on (the Watch button on the viewer opts any
   artifact in or out). Five minutes after a watched artifact's discussion goes quiet, everyone watching gets one
   email with all the comments they haven't seen — never their own.

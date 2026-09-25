@@ -107,12 +107,13 @@ describe('mcp', () => {
     expect(lastUsed()).not.toBeNull();
   });
 
-  test('lists the eight tools', async () => {
+  test('lists the nine tools', async () => {
     const result = await rpcResult(await rpc('tools/list', {}));
     const names = result.tools.map((t: any) => t.name).sort();
     expect(names).toEqual([
       'add_comment',
       'delete_artifact',
+      'edit_comment',
       'get_artifact',
       'get_comments',
       'list_projects',
@@ -377,6 +378,42 @@ describe('mcp', () => {
     );
     expect(thread.isError).toBe(true);
     expect(thread.content[0].text).toContain('unknown document_id');
+  });
+
+  test('edit_comment rewrites a comment the agent posted and marks it edited', async () => {
+    const result = await callTool('edit_comment', { comment_id: agentCommentId, body: 'Which **segments**?\n\n- EMEA\n- APAC' });
+    expect(result.isError, result.content[0].text).toBeFalsy();
+    expect(result.content[0].text).toContain(`Comment ${agentCommentId}`);
+
+    const row = db.select().from(comments).where(eq(comments.id, agentCommentId)).get()!;
+    expect(row.body).toBe('Which **segments**?\n\n- EMEA\n- APAC');
+    expect(row.editedAt).not.toBeNull();
+    expect(row.viaTokenLabel).toBe('Claude Code');
+  });
+
+  test("edit_comment refuses other people's comments, the owner's own typed comments, and other teams", async () => {
+    const someoneElse = await callTool('edit_comment', { comment_id: commentId, body: 'x' });
+    expect(someoneElse.isError).toBe(true);
+    expect(someoneElse.content[0].text).toContain('only its author');
+
+    const alice = getOrCreateUser(db, 'alice@example.com', new Date());
+    const typed = db.select().from(comments).where(eq(comments.id, commentId)).get()!;
+    db.insert(comments).values({ ...typed, id: 'typedbyalice0001', authorId: alice.id, body: 'I typed this.' }).run();
+    const typedByOwner = await callTool('edit_comment', { comment_id: 'typedbyalice0001', body: 'x' });
+    expect(typedByOwner.isError).toBe(true);
+    expect(typedByOwner.content[0].text).toContain('web UI');
+    expect(db.select().from(comments).where(eq(comments.id, 'typedbyalice0001')).get()!.body).toBe('I typed this.');
+    db.delete(comments).where(eq(comments.id, 'typedbyalice0001')).run();
+
+    const unknown = await callTool('edit_comment', { comment_id: 'doesnotexist', body: 'x' });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.content[0].text).toContain('unknown comment_id');
+
+    const mallory = getOrCreateUser(db, 'mallory@evil.com', new Date());
+    const malloryPat = createToken(db, mallory.id, 'team-evil', 'evil', new Date()).plaintext;
+    const crossTeam = await callTool('edit_comment', { comment_id: agentCommentId, body: 'x' }, malloryPat);
+    expect(crossTeam.isError).toBe(true);
+    expect(crossTeam.content[0].text).toContain('unknown comment_id');
   });
 
   test('republish reports the orphaned comment and updates anchor states', async () => {

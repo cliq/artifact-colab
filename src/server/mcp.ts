@@ -32,7 +32,7 @@ import { resolveDocumentAccess } from './services/access.js';
 import { assetsForDocument } from './services/assets.js';
 import type { IncomingAsset } from './services/assets.js';
 import { indexVersionHtml } from './services/anchorStates.js';
-import { createReply, createThreadComment, locateQuote, type CommentVia } from './services/comments.js';
+import { createReply, createThreadComment, editComment, locateQuote, type CommentVia } from './services/comments.js';
 import { deleteDocumentCascade } from './services/documents.js';
 import { publishArtifact } from './services/publish.js';
 import { getProjectForUser, moveArtifact, ProjectError, visibleProjectsForTeam } from './services/projects.js';
@@ -267,7 +267,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       title: 'Get comments',
       description:
         'Fetch comment threads on a document as structured JSON: quoted text, anchor context, author, replies, resolution status, ' +
-        "and each comment's anchor state on the current version (anchored / ambiguous / orphaned).",
+        "and each comment's anchor state on the current version (anchored / ambiguous / orphaned). Bodies are Markdown.",
       inputSchema: z.object({
         document_id: z.string(),
         status: z.enum(['open', 'resolved']).optional().describe('Filter by thread status; omit for all'),
@@ -301,7 +301,10 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       title: 'Add comment',
       description:
         "Post a comment on an artifact as the user this token belongs to. The web UI shows it under that user's name with an " +
-        `"agent" badge naming this token ("${token.label}"), so people can tell which agent wrote it. ` +
+        `"Agent" badge naming this token ("${token.label}"), so readers already know an agent wrote it on that user's behalf — ` +
+        'don\'t add a "written by Claude" / "on behalf of" note to the body. ' +
+        'The body is rendered as Markdown (GFM: **bold**, `code`, lists, code blocks, quotes, tables, links; single line breaks are kept), ' +
+        'so format longer comments for readability. Raw HTML is shown as literal text and images appear as links. ' +
         'Two modes. (1) New thread: pass document_id and quoted_text — the passage of the current version the comment is about, ' +
         'quoted exactly as it reads in the rendered page (read it with get_artifact first). Markup is ignored and whitespace/curly quotes ' +
         'are normalized, but the quote must occur exactly once; if it appears several times, extend it with surrounding words. ' +
@@ -309,7 +312,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         'To tag a teammate, write their email with a leading @ in the body (e.g. "@bob@example.com please review"): they are ' +
         'subscribed to the artifact and receive the comment by email.',
       inputSchema: z.object({
-        body: z.string().min(1).max(10000).describe('The comment text (plain text; line breaks are preserved)'),
+        body: z.string().min(1).max(10000).describe('The comment text, as Markdown'),
         document_id: z.string().optional().describe('Document to open a new thread on; required together with quoted_text'),
         quoted_text: z
           .string()
@@ -389,6 +392,37 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
               `Reply to it later with add_comment({ comment_id: "${created.id}" }).`,
           },
         ],
+      };
+    },
+  );
+
+  server.registerTool(
+    'edit_comment',
+    {
+      title: 'Edit comment',
+      description:
+        'Replace the body of a comment or reply that an agent posted as this user (through add_comment with any of their tokens), e.g. ' +
+        'to fix a mistake or update a status note. Comments the user typed themselves in the web UI, and other people\'s comments, ' +
+        'cannot be edited. The anchor, replies and resolution status stay as they are; the UI marks the comment as edited. ' +
+        'The body is Markdown, like add_comment; people newly @-mentioned by the edit are subscribed to the artifact.',
+      inputSchema: z.object({
+        comment_id: z.string().describe('The comment or reply to edit (from add_comment or get_comments)'),
+        body: z.string().min(1).max(10000).describe('The new comment text, as Markdown'),
+      }),
+    },
+    async ({ comment_id, body }) => {
+      if (!used()) return toolError('token is no longer authorized');
+      const comment = db.select().from(comments).where(eq(comments.id, comment_id)).get();
+      const doc = comment ? findDocumentInTeam(db, comment.documentId, teamId, user.id) : undefined;
+      if (!comment || !doc) return toolError(`unknown comment_id: ${comment_id}`);
+      if (!resolveDocumentAccess(db, doc.id, user.id)?.canComment) return toolError('editor permission required');
+      if (comment.authorId !== user.id) return toolError(`comment ${comment_id} was written by someone else; only its author can edit it`);
+      if (!comment.viaTokenId) {
+        return toolError(`comment ${comment_id} was typed by ${user.email} in the web UI; agents can only edit comments posted through add_comment`);
+      }
+      editComment(db, { comment, document: doc, body });
+      return {
+        content: [{ type: 'text', text: `Comment ${comment_id} on "${doc.title}" (${config.baseUrl}/d/${doc.id}) updated.` }],
       };
     },
   );
