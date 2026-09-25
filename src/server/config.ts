@@ -4,6 +4,8 @@
  * of variables this reads.
  */
 
+import { dirname, join } from 'node:path';
+
 const DEFAULT_FRAME_CDN_ALLOWLIST = [
   'cdn.tailwindcss.com',
   'cdn.jsdelivr.net',
@@ -15,6 +17,8 @@ const DEFAULT_FRAME_CDN_ALLOWLIST = [
 
 export interface Config {
   databasePath: string;
+  /** Where admin-created backup packages are written; defaults to `backups/` next to the database. */
+  backupDir: string;
   resendApiKey: string;
   emailFrom: string;
   /**
@@ -68,8 +72,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error('DEV_LOGIN_CODE is a development-only sign-in bypass and must not be set in production');
   }
 
+  const databasePath = env.DATABASE_PATH ?? './data/app.db';
+
   return {
-    databasePath: env.DATABASE_PATH ?? './data/app.db',
+    databasePath,
+    backupDir: env.BACKUP_DIR || join(dirname(databasePath), 'backups'),
     resendApiKey: env.RESEND_API_KEY ?? '',
     emailFrom: env.EMAIL_FROM ?? '',
     instanceAdminEmails: parseCommaSeparated(env.INSTANCE_ADMIN_EMAILS),

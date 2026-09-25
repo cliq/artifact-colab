@@ -1110,4 +1110,92 @@ th[aria-sort='descending'] .sort-indicator {
     flex-wrap: wrap;
   }
 }
+
+/* Admin backups: a link styled as the outline row-action button, and the packing bar. */
+a.button-link {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-pill);
+  padding: 0.5rem 1.1rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+a.button-link:hover {
+  background: var(--color-paper-2);
+}
+
+.backup-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.backup-progress[hidden] {
+  display: none;
+}
+
+.backup-progress progress {
+  width: 100%;
+  height: 0.6rem;
+  accent-color: var(--color-accent);
+}
+
+.backup-start button:disabled {
+  opacity: 0.55;
+  cursor: default;
+  transform: none;
+}
+
+.backup-hint[hidden] {
+  display: none;
+}
+
+.backup-name {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  word-break: break-all;
+}
+
+.backup-actions {
+  white-space: nowrap;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.backup-narrow {
+  display: none;
+  margin-top: 0.25rem;
+}
+
+@media (max-width: 640px) {
+  .backup-wide {
+    display: none;
+  }
+
+  .backup-narrow {
+    display: block;
+  }
+
+  .backup-actions {
+    white-space: normal;
+  }
+
+  .backup-actions form,
+  .backup-actions a.button-link {
+    display: flex;
+    justify-content: center;
+    margin: 0 0 0.4rem;
+  }
+
+  .backup-actions form button {
+    width: 100%;
+  }
+}
 `;

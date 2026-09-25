@@ -4,12 +4,16 @@
  * the way a real sign-in would.
  */
 
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type { Config } from '../../src/server/config.js';
 import { teamDomains, teams, type DB } from '../../src/server/db/index.js';
 
 export function baseTestConfig(overrides: Partial<Config> = {}): Config {
   return {
     databasePath: ':memory:',
+    backupDir: join(tmpdir(), 'artifact-colab-test-backups'),
     resendApiKey: '',
     emailFrom: 'noreply@example.com',
     instanceAdminEmails: [],

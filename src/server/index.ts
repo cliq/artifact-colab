@@ -10,13 +10,17 @@ import { createApp } from './app.js';
 import { loadConfig } from './config.js';
 import { openDb } from './db/index.js';
 import { sendDigest } from './email.js';
+import { BackupManager } from './services/backups.js';
 import { runDigestSweep } from './services/watches.js';
 
 const DIGEST_SWEEP_INTERVAL_MS = 60 * 1000;
 
 const config = loadConfig();
-const { db } = openDb(config.databasePath);
-const app = createApp({ db, config });
+const { db, sqlite } = openDb(config.databasePath);
+const backups = new BackupManager(config.backupDir, sqlite);
+// A restart mid-backup leaves temp files that no job will ever finish.
+backups.sweepLeftovers().catch((err) => console.error('Backup cleanup failed:', err));
+const app = createApp({ db, config, backups });
 
 serve({ fetch: app.fetch, port: config.port }, (info) => {
   console.log(`Listening on http://localhost:${info.port}`);

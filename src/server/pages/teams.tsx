@@ -1,6 +1,6 @@
 /**
  * Admin surfaces for the teams model: the instance-admin area (/admin — teams,
- * auto-join domains, instance admins) and per-team settings for team admins.
+ * auto-join domains, instance admins, backups) and per-team settings for team admins.
  * The member/invite management markup is shared between the two via
  * `actionBase`, since both post to the same-shaped sub-routes.
  */
@@ -9,6 +9,7 @@ import type { FC } from 'hono/jsx';
 
 import type { Team, TeamDomain, TeamInvite, User } from '../db/schema.js';
 import { formatBytes, type InstanceStats, type TeamStats } from '../services/teamStats.js';
+import { BackupsSection, type BackupsSectionProps } from './backups.js';
 import { Layout } from './layout.js';
 import { LocalTime } from './localTime.js';
 
@@ -259,9 +260,10 @@ export const AdminPage: FC<{
   pendingEnvAdmins: string[];
   /** Accounts with no team membership at all — they see an empty workspace until someone invites them. */
   teamlessUsers: User[];
+  backups: BackupsSectionProps;
   error?: string;
   notice?: string;
-}> = ({ user, csrfToken, teams, instance, admins, pendingEnvAdmins, teamlessUsers, error, notice }) => (
+}> = ({ user, csrfToken, teams, instance, admins, pendingEnvAdmins, teamlessUsers, backups, error, notice }) => (
   <Layout title="Admin - Artifact Colab" user={user} csrfToken={csrfToken} isInstanceAdmin>
     <h1>Admin</h1>
     <Feedback error={error} notice={notice} />
@@ -407,6 +409,8 @@ export const AdminPage: FC<{
         </div>
       </section>
     )}
+
+    <BackupsSection {...backups} csrfToken={csrfToken} />
   </Layout>
 );
 

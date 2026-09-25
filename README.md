@@ -130,10 +130,11 @@ Use the same configured `DEV_LOGIN_CODE` for these demo emails, or read their si
 - Large artifacts don't have to squeeze through an MCP tool call: `POST /api/publish` accepts a multipart upload
   (HTML file + image assets) with the same bearer token, so Claude can `curl` big files straight from disk. The
   `publish_artifact` tool description includes the exact command.
-- Backups are one SQLite file. The runtime image has no `sqlite3` CLI, so use the bundled driver's online-backup API
-  (safe while the app is running):
-  `docker compose exec artifact-colab node -e "require('better-sqlite3')('/data/app.db').backup('/data/backup.db').then(() => console.log('done'))"`
-  then copy it out with `docker compose cp artifact-colab:/data/backup.db .`.
+- Instance admins can take a backup from **Admin → Backups**: the server packs a live snapshot of all data into a
+  `.tar.gz` (the SQLite database plus a manifest), shows progress while packing, and keeps a list of previous packages
+  to download again or delete. Downloads support HTTP ranges, so an interrupted one resumes where it stopped. Packages
+  are written to `BACKUP_DIR` (default `backups/` next to the database, i.e. `/data/backups` on the Docker volume) — copy
+  them off the host, since they share its disk. To restore, extract `app.db` and point `DATABASE_PATH` at it.
 - Agents can publish Markdown instead of HTML (`markdown` in place of `html`, in the MCP tool or the upload
   endpoint): the server renders it to a clean page and hands the original Markdown source back to the agent when
   it fetches the artifact for revision.

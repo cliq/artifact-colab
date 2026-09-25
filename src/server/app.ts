@@ -23,6 +23,7 @@ import { pageRoutes } from './routes/pages.js';
 import { publishRoutes } from './routes/publish.js';
 import { projectRoutes } from './routes/projects.js';
 import { tokensRoutes } from './routes/tokens.js';
+import { BackupManager } from './services/backups.js';
 
 // Publishing legitimately carries multi-megabyte bodies (5 MB html + 20 MB of
 // assets, base64-inflated over MCP); every other endpoint takes small forms
@@ -33,12 +34,14 @@ const PUBLISH_MAX_BODY_BYTES = 40 * 1024 * 1024;
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 const PUBLISH_BODY_PATHS = new Set(['/api/publish', '/mcp']);
 
-export function createApp(deps: { db: DB; config: Config }): Hono<AppEnv> {
+export function createApp(deps: { db: DB; config: Config; backups?: BackupManager }): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+  const backups = deps.backups ?? new BackupManager(deps.config.backupDir, deps.db.$client);
 
   app.use('*', async (c, next) => {
     c.set('db', deps.db);
     c.set('config', deps.config);
+    c.set('backups', backups);
     await next();
   });
 
