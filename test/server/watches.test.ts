@@ -204,6 +204,26 @@ describe('watches', () => {
     expect(aliceEmail.text).toContain('carol@example.com replied:');
   });
 
+  test('the HTML digest renders comment Markdown, agent badges and mentions, and escapes raw HTML', async () => {
+    makeDoc('d-html');
+    autoWatch(db, 'd-html', carol.id, T0);
+    const threadId = postThread('d-html', alice, '**Done**: see `commit 666a`\n\n- one\n- two\n\n<script>alert(1)</script>\n\nping @bob@example.com', at(1));
+    db.update(comments).set({ viaTokenId: 'tok1', viaTokenLabel: 'Claude' }).where(eq(comments.id, threadId)).run();
+
+    const sent = await sweep(quietAfter(at(1)));
+    const email = sent.find((e) => e.to === 'carol@example.com')!;
+    expect(email.html).toContain('<strong>Done</strong>');
+    expect(email.html).toMatch(/<code style="[^"]*">commit 666a<\/code>/);
+    expect(email.html).toMatch(/<li style="[^"]*">one<\/li>/);
+    expect(email.html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(email.html).not.toContain('<script>');
+    expect(email.html).toMatch(/<strong style="[^"]*">@bob@example.com<\/strong>/);
+    expect(email.html).toContain('Agent</span> Claude');
+    expect(email.html).toContain(`href="${BASE_URL}/d/d-html"`);
+    // The plain-text part keeps the Markdown source as written.
+    expect(email.text).toContain('**Done**: see `commit 666a`');
+  });
+
   test('own-only activity advances the cursor without emailing the author', async () => {
     makeDoc('d-own');
     autoWatch(db, 'd-own', alice.id, T0);

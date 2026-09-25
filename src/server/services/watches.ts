@@ -9,6 +9,7 @@
 import { and, eq, gt } from 'drizzle-orm';
 
 import { mentionableUsers, resolveDocumentAccess } from './access.js';
+import { escapeHtml, renderCommentEmailHtml } from './markdown.js';
 import { extractMentionEmails } from '../../shared/mentions.js';
 import type { DBOrTx } from '../db/index.js';
 import { comments, documents, users, watches, type Comment, type Document, type User } from '../db/schema.js';
@@ -93,28 +94,25 @@ export interface DigestEmail {
   documentId: string;
   subject: string;
   text: string;
+  html: string;
 }
 
 export type DigestSender = (email: DigestEmail) => Promise<void>;
 
-/** Whether `item` contains an authorized mention of the recipient. */
-function mentionsRecipient(db: DBOrTx, document: Document, item: Comment, recipientId: string): boolean {
-  return resolveMentions(db, document, item.authorId, item.body).some((user) => user.id === recipientId);
+interface DigestItem {
+  comment: Comment;
+  authorEmail: string;
+  mentioned: boolean;
+  /** Resolved mentions in the body: lowercased email → display name. */
+  mentions: Map<string, string>;
 }
 
-function digestText(
-  baseUrl: string,
-  docTitle: string,
-  docId: string,
-  items: Comment[],
-  authorEmails: Map<string, string>,
-  mentionedCommentIds: Set<string>,
-): string {
+const WATCH_FOOTER = 'You get these emails because you watch this artifact; use its Watch button to stop.';
+
+function digestText(baseUrl: string, docTitle: string, docId: string, items: DigestItem[]): string {
   const lines: string[] = [`New comments on "${docTitle}":`, ''];
-  for (const item of items) {
-    const person = authorEmails.get(item.authorId) ?? 'someone';
-    const author = item.viaTokenLabel ? `${person} (via ${item.viaTokenLabel})` : person;
-    const mentioned = mentionedCommentIds.has(item.id);
+  for (const { comment: item, authorEmail, mentioned } of items) {
+    const author = item.viaTokenLabel ? `${authorEmail} (via ${item.viaTokenLabel})` : authorEmail;
     if (item.parentId === null) {
       lines.push(`${author} ${mentioned ? 'mentioned you' : 'commented'} on "${item.quotedText}":`);
     } else {
@@ -122,8 +120,50 @@ function digestText(
     }
     lines.push(item.body, '');
   }
-  lines.push(`View and reply: ${baseUrl}/d/${docId}`);
+  lines.push(`View and reply: ${baseUrl}/d/${docId}`, '', WATCH_FOOTER);
   return lines.join('\n');
+}
+
+/**
+ * The same digest as HTML, so comment bodies show their Markdown formatting.
+ * Styles are inline and the layout is a single centered column, the one
+ * shape email clients agree on.
+ */
+function digestHtml(baseUrl: string, docTitle: string, docId: string, items: DigestItem[]): string {
+  const url = escapeHtml(`${baseUrl}/d/${docId}`);
+  const entries = items.map(({ comment: item, authorEmail, mentioned, mentions }) => {
+    const agent = item.viaTokenLabel
+      ? ` <span style="display:inline-block;padding:0 5px;border:1px solid #f0c7ae;border-radius:4px;background:#fdf1ea;color:#c2410c;font-size:11px;">` +
+        `<span style="text-transform:uppercase;letter-spacing:0.02em;opacity:0.75;">Agent</span> ${escapeHtml(item.viaTokenLabel)}</span>`
+      : '';
+    const action =
+      item.parentId === null ? (mentioned ? 'mentioned you on' : 'commented on') : mentioned ? 'mentioned you in a reply' : 'replied';
+    const quote =
+      item.parentId === null
+        ? `<div style="margin:6px 0 8px;padding:0 0 0 10px;border-left:3px solid #c2410c;color:#6f665f;font-style:italic;">${escapeHtml(item.quotedText ?? '')}</div>`
+        : '';
+    return (
+      `<div style="padding:14px 0;border-top:1px solid #ece6dd;">` +
+      `<div style="font-size:13px;color:#6f665f;margin-bottom:6px;"><strong style="color:#2a2522;">${escapeHtml(authorEmail)}</strong>${agent} ${action}</div>` +
+      quote +
+      `<div style="font-size:14px;line-height:1.5;color:#2a2522;">${renderCommentEmailHtml(item.body, mentions)}</div>` +
+      `</div>`
+    );
+  });
+  return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(docTitle)}</title></head>
+<body style="margin:0;padding:0;background:#faf8f5;">
+<div style="max-width:600px;margin:0 auto;padding:24px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#2a2522;">
+<div style="font-size:13px;color:#6f665f;margin-bottom:4px;">New comments on</div>
+<div style="font-size:18px;font-weight:600;margin-bottom:12px;"><a href="${url}" style="color:#2a2522;text-decoration:none;">${escapeHtml(docTitle)}</a></div>
+${entries.join('\n')}
+<div style="padding:16px 0;border-top:1px solid #ece6dd;"><a href="${url}" style="display:inline-block;padding:8px 14px;border-radius:6px;background:#c2410c;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;">View and reply</a></div>
+<div style="font-size:12px;color:#9a918a;">${escapeHtml(WATCH_FOOTER)}</div>
+</div>
+</body>
+</html>
+`;
 }
 
 /**
@@ -185,21 +225,23 @@ export async function runDigestSweep(db: DBOrTx, baseUrl: string, send: DigestSe
       if (toEmail.length > 0) {
         const to = emailOf(watch.userId);
         if (to) {
-          const authorEmails = new Map<string, string>();
-          for (const item of toEmail) {
-            const email = emailOf(item.authorId);
-            if (email) authorEmails.set(item.authorId, email);
-          }
-          const count = toEmail.length;
-          const mentionedCommentIds = new Set(
-            toEmail.filter((item) => mentionsRecipient(db, doc, item, watch.userId)).map((item) => item.id),
-          );
-          const mentioned = mentionedCommentIds.size > 0;
+          const items: DigestItem[] = toEmail.map((comment) => {
+            const resolved = resolveMentions(db, doc, comment.authorId, comment.body);
+            return {
+              comment,
+              authorEmail: emailOf(comment.authorId) ?? 'someone',
+              mentioned: resolved.some((user) => user.id === watch.userId),
+              mentions: new Map(resolved.map((user) => [user.email.toLowerCase(), user.name ?? user.email])),
+            };
+          });
+          const count = items.length;
+          const mentioned = items.some((item) => item.mentioned);
           const email: DigestEmail = {
             to,
             documentId,
             subject: `${count} new comment${count === 1 ? '' : 's'} on "${doc.title}"${mentioned ? ' (you were mentioned)' : ''}`,
-            text: digestText(baseUrl, doc.title, doc.id, toEmail, authorEmails, mentionedCommentIds),
+            text: digestText(baseUrl, doc.title, doc.id, items),
+            html: digestHtml(baseUrl, doc.title, doc.id, items),
           };
           try {
             if (!resolveDocumentAccess(db, documentId, watch.userId) || !isWatching(db, documentId, watch.userId)) continue;

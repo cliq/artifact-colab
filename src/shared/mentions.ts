@@ -22,3 +22,34 @@ export function extractMentionEmails(body: string): string[] {
   }
   return [...seen];
 }
+
+/** A mention at the very start of `src` — the anchored form of `MENTION_RE`. */
+const MENTION_AT_START = /^@([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})/;
+/** Where a mention could begin in `src`: an `@` not glued to a word character or another `@`. */
+const MENTION_START = /(^|[^\w@])@[A-Za-z0-9._%+-]+@/;
+
+export interface MentionToken {
+  type: 'mention';
+  raw: string;
+  email: string;
+}
+
+/**
+ * The lexing half of a marked inline extension for `@email` mentions, shared
+ * by the sidebar and the digest email so both see the same mentions (and none
+ * inside code). Each side supplies its own renderer and decides which emails
+ * are resolved mentions; the rest render as the raw text.
+ */
+export const mentionLexer = {
+  name: 'mention',
+  level: 'inline' as const,
+  start(src: string): number | undefined {
+    const match = MENTION_START.exec(src);
+    return match ? match.index + match[1]!.length : undefined;
+  },
+  tokenizer(src: string): MentionToken | undefined {
+    const match = MENTION_AT_START.exec(src);
+    if (!match) return undefined;
+    return { type: 'mention', raw: match[0], email: match[1]! };
+  },
+};

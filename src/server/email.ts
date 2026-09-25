@@ -121,13 +121,14 @@ export async function sendEditPermissionRequest(
   return sendRecordedEmail(config, { to, subject, text }, 'edit permission request');
 }
 
-export async function sendDigest(config: Config, to: string, subject: string, text: string): Promise<void> {
+/** A comment digest, sent as HTML with a plain-text alternative. */
+export async function sendDigest(config: Config, message: { to: string; subject: string; text: string; html: string }): Promise<void> {
   if (config.devEmailFile) {
-    appendFileSync(config.devEmailFile, `${JSON.stringify({ to, subject, text })}\n`);
+    appendFileSync(config.devEmailFile, `${JSON.stringify(message)}\n`);
     return;
   }
 
   const resend = new Resend(config.resendApiKey);
-  const { error } = await resend.emails.send({ from: config.emailFrom, to, subject, text });
+  const { error } = await resend.emails.send({ from: config.emailFrom, ...message });
   if (error) throw new Error(`Resend: ${error.name}: ${error.message}`);
 }

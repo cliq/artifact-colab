@@ -10,34 +10,11 @@
 
 import { Marked, type Token, type Tokens, type TokenizerAndRendererExtension } from 'marked';
 
+import { mentionLexer, type MentionToken } from '../shared/mentions.js';
 import type { MentionDTO } from './mentions.js';
 
-/** Same shape as shared/mentions.ts: `@` + email ending in a dotted TLD. */
-const MENTION_AT_START = /^@([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})/;
-/** A mention may only start a word: not glued to a preceding word character or `@`. */
-const MENTION_START = /(^|[^\w@])@[A-Za-z0-9._%+-]+@/;
-
-interface MentionToken {
-  type: 'mention';
-  raw: string;
-  email: string;
-}
-
-const mentionExtension: TokenizerAndRendererExtension = {
-  name: 'mention',
-  level: 'inline',
-  start(src) {
-    const match = MENTION_START.exec(src);
-    return match ? match.index + match[1]!.length : undefined;
-  },
-  tokenizer(src) {
-    const match = MENTION_AT_START.exec(src);
-    if (!match) return undefined;
-    return { type: 'mention', raw: match[0], email: match[1]! } satisfies MentionToken;
-  },
-  // Only the lexer is used; the DOM builder below renders mention tokens.
-  renderer: () => false,
-};
+// Only the lexer is used; the DOM builder below renders mention tokens.
+const mentionExtension: TokenizerAndRendererExtension = { ...mentionLexer, renderer: () => false };
 
 const markdown = new Marked({ gfm: true, breaks: true, extensions: [mentionExtension] });
 

@@ -25,7 +25,7 @@ serve({ fetch: app.fetch, port: config.port }, (info) => {
 // The sweep itself decides what is due (documents quiet for 5 minutes with
 // unseen comments); the interval only sets how promptly that fires.
 setInterval(() => {
-  runDigestSweep(db, config.baseUrl, (email) => sendDigest(config, email.to, email.subject, email.text)).catch(
+  runDigestSweep(db, config.baseUrl, ({ to, subject, text, html }) => sendDigest(config, { to, subject, text, html })).catch(
     (err) => console.error('Digest sweep failed:', err),
   );
 }, DIGEST_SWEEP_INTERVAL_MS).unref();
