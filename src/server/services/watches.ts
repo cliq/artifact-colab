@@ -9,6 +9,7 @@
 import { and, eq, gt } from 'drizzle-orm';
 
 import { mentionableUsers, resolveDocumentAccess } from './access.js';
+import { imagesForComments } from './commentImages.js';
 import { escapeHtml, renderCommentEmailHtml } from './markdown.js';
 import { extractMentionEmails } from '../../shared/mentions.js';
 import type { DBOrTx } from '../db/index.js';
@@ -105,20 +106,28 @@ interface DigestItem {
   mentioned: boolean;
   /** Resolved mentions in the body: lowercased email → display name. */
   mentions: Map<string, string>;
+  /** Images attached to the comment; the digest names the count, the artifact shows them. */
+  imageCount: number;
+}
+
+function imagesNote(count: number): string {
+  return count === 0 ? '' : `📎 ${count} image${count === 1 ? '' : 's'} attached`;
 }
 
 const WATCH_FOOTER = 'You get these emails because you watch this artifact; use its Watch button to stop.';
 
 function digestText(baseUrl: string, docTitle: string, docId: string, items: DigestItem[]): string {
   const lines: string[] = [`New comments on "${docTitle}":`, ''];
-  for (const { comment: item, authorEmail, mentioned } of items) {
+  for (const { comment: item, authorEmail, mentioned, imageCount } of items) {
     const author = item.viaTokenLabel ? `${authorEmail} (via ${item.viaTokenLabel})` : authorEmail;
     if (item.parentId === null) {
       lines.push(`${author} ${mentioned ? 'mentioned you' : 'commented'} on "${item.quotedText}":`);
     } else {
       lines.push(`${author} ${mentioned ? 'mentioned you in a reply' : 'replied'}:`);
     }
-    lines.push(item.body, '');
+    lines.push(item.body);
+    if (imageCount > 0) lines.push(imagesNote(imageCount));
+    lines.push('');
   }
   lines.push(`View and reply: ${baseUrl}/d/${docId}`, '', WATCH_FOOTER);
   return lines.join('\n');
@@ -131,7 +140,7 @@ function digestText(baseUrl: string, docTitle: string, docId: string, items: Dig
  */
 function digestHtml(baseUrl: string, docTitle: string, docId: string, items: DigestItem[]): string {
   const url = escapeHtml(`${baseUrl}/d/${docId}`);
-  const entries = items.map(({ comment: item, authorEmail, mentioned, mentions }) => {
+  const entries = items.map(({ comment: item, authorEmail, mentioned, mentions, imageCount }) => {
     const agent = item.viaTokenLabel
       ? ` <span style="display:inline-block;padding:0 5px;border:1px solid #f0c7ae;border-radius:4px;background:#fdf1ea;color:#c2410c;font-size:11px;">` +
         `<span style="text-transform:uppercase;letter-spacing:0.02em;opacity:0.75;">Agent</span> ${escapeHtml(item.viaTokenLabel)}</span>`
@@ -147,6 +156,7 @@ function digestHtml(baseUrl: string, docTitle: string, docId: string, items: Dig
       `<div style="font-size:13px;color:#6f665f;margin-bottom:6px;"><strong style="color:#2a2522;">${escapeHtml(authorEmail)}</strong>${agent} ${action}</div>` +
       quote +
       `<div style="font-size:14px;line-height:1.5;color:#2a2522;">${renderCommentEmailHtml(item.body, mentions)}</div>` +
+      (imageCount > 0 ? `<div style="margin-top:6px;font-size:13px;color:#6f665f;">${escapeHtml(imagesNote(imageCount))}</div>` : '') +
       `</div>`
     );
   });
@@ -214,6 +224,7 @@ export async function runDigestSweep(db: DBOrTx, baseUrl: string, send: DigestSe
 
     const doc = db.select().from(documents).where(eq(documents.id, documentId)).get();
     if (!doc) continue;
+    const images = imagesForComments(db, fresh.map((item) => item.id));
 
     for (const watch of docWatchers) {
       // A previous send awaits network I/O: both access and preference may have changed.
@@ -232,6 +243,7 @@ export async function runDigestSweep(db: DBOrTx, baseUrl: string, send: DigestSe
               authorEmail: emailOf(comment.authorId) ?? 'someone',
               mentioned: resolved.some((user) => user.id === watch.userId),
               mentions: new Map(resolved.map((user) => [user.email.toLowerCase(), user.name ?? user.email])),
+              imageCount: images.get(comment.id)?.length ?? 0,
             };
           });
           const count = items.length;

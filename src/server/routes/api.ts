@@ -11,10 +11,11 @@ import { z } from 'zod';
 
 import type { AppEnv } from '../context.js';
 import type { DB } from '../db/index.js';
-import { comments, commentAnchorStates, commentReactions, documents, teamMembers, users, versions, type Comment, type Document, type Version } from '../db/schema.js';
+import { comments, commentAnchorStates, commentImages, commentReactions, documents, teamMembers, users, versions, type Comment, type Document, type Version } from '../db/schema.js';
 import { isReactionEmoji, REACTION_EMOJIS } from '../../shared/reactions.js';
 import { resolveDocumentAccess, mentionableUsers, type DocumentAccess } from '../services/access.js';
 import { assetsForDocument, relinkAssets, stripBaseHref } from '../services/assets.js';
+import { imagesForComments, validateCommentImages, type CommentImageDTO, type ValidImage } from '../services/commentImages.js';
 import { createReply, createThreadComment, editComment } from '../services/comments.js';
 import { gravatarUrl } from '../services/gravatar.js';
 import { getProjectForUser } from '../services/projects.js';
@@ -30,16 +31,17 @@ const anchorSchema = z.object({
   docLength: z.number().int().nonnegative(),
 });
 
+// Bodies may be empty only when images are attached; the handlers check that.
 const createCommentSchema = z.object({
-  body: z.string().min(1).max(10000),
+  body: z.string().max(10000),
   quotedText: z.string().max(10000),
   anchor: anchorSchema,
   versionId: z.string().min(1),
 });
 
-const replySchema = z.object({ body: z.string().min(1).max(10000) });
+const replySchema = z.object({ body: z.string().max(10000) });
 
-const editSchema = z.object({ body: z.string().trim().min(1).max(10000) });
+const editSchema = z.object({ body: z.string().trim().max(10000) });
 
 async function readJson(c: Context<AppEnv>): Promise<unknown> {
   try {
@@ -47,6 +49,36 @@ async function readJson(c: Context<AppEnv>): Promise<unknown> {
   } catch {
     return {};
   }
+}
+
+type CommentUpload = { json: unknown; images: { ok: true; images: ValidImage[] } | { ok: false; error: string } };
+
+/**
+ * A new comment or reply: plain JSON, or — when images are attached —
+ * multipart/form-data with the same JSON in a `payload` field and up to
+ * `MAX_COMMENT_IMAGES` files in `images`.
+ */
+async function readCommentUpload(c: Context<AppEnv>): Promise<CommentUpload> {
+  if (!(c.req.header('content-type') ?? '').toLowerCase().startsWith('multipart/form-data')) {
+    return { json: await readJson(c), images: { ok: true, images: [] } };
+  }
+  let form: Record<string, string | File | (string | File)[]>;
+  try {
+    form = await c.req.parseBody({ all: true });
+  } catch {
+    return { json: {}, images: { ok: true, images: [] } };
+  }
+  let json: unknown = {};
+  try {
+    json = typeof form['payload'] === 'string' ? JSON.parse(form['payload']) : {};
+  } catch {
+    // Invalid JSON fails schema validation below.
+  }
+  const files = [form['images'] ?? []].flat().filter((part): part is File => typeof part !== 'string');
+  const incoming = await Promise.all(
+    files.map(async (file, i) => ({ label: file.name ? `"${file.name}"` : `image ${i + 1}`, data: Buffer.from(await file.arrayBuffer()) })),
+  );
+  return { json, images: validateCommentImages(incoming) };
 }
 
 /** Compatibility lookups delegate to the shared capability policy. */
@@ -152,6 +184,7 @@ interface ThreadReplyDTO {
   editedAt: Date | null;
   reactions: ReactionDTO[];
   mentions: MentionDTO[];
+  images: CommentImageDTO[];
 }
 
 /**
@@ -214,6 +247,7 @@ export interface ThreadDTO {
   anchorState: AnchorStateDTO | null;
   reactions: ReactionDTO[];
   mentions: MentionDTO[];
+  images: CommentImageDTO[];
   replies: ThreadReplyDTO[];
 }
 
@@ -232,6 +266,7 @@ export function buildThread(db: DB, comment: Comment, versionId: string | undefi
 
   const replyRows = db.select().from(comments).where(eq(comments.parentId, comment.id)).orderBy(asc(comments.createdAt)).all();
   const reactions = reactionsFor(db, [comment.id, ...replyRows.map((reply) => reply.id)], viewerId);
+  const images = imagesForComments(db, [comment.id, ...replyRows.map((reply) => reply.id)]);
 
   return {
     id: comment.id,
@@ -250,6 +285,7 @@ export function buildThread(db: DB, comment: Comment, versionId: string | undefi
       : null,
     reactions: reactions.get(comment.id) ?? [],
     mentions: mentionsFor(db, comment.body, document, comment.authorId),
+    images: images.get(comment.id) ?? [],
     replies: replyRows.map((reply) => ({
       id: reply.id,
       body: reply.body,
@@ -258,6 +294,7 @@ export function buildThread(db: DB, comment: Comment, versionId: string | undefi
       editedAt: reply.editedAt,
       reactions: reactions.get(reply.id) ?? [],
       mentions: mentionsFor(db, reply.body, document, reply.authorId),
+      images: images.get(reply.id) ?? [],
     })),
   };
 }
@@ -362,12 +399,17 @@ apiRoutes.post('/api/docs/:slug/comments', async (c) => {
   // Body first, access second: the DB is synchronous, so checking after the
   // last await keeps check-and-act atomic — a revoke landing while the body
   // streams in can't resurrect access (or the outsider's watch via autoWatch).
-  const parsed = createCommentSchema.safeParse(await readJson(c));
+  const upload = await readCommentUpload(c);
+  const parsed = createCommentSchema.safeParse(upload.json);
 
   const doc = findDocumentForViewer(db, c.req.param('slug'), user.id)?.document;
   if (!doc) return c.json({ error: 'not found' }, 404);
   if (!resolveDocumentAccess(db, doc.id, user.id)?.canComment) return c.json({ error: 'editor permission required' }, 403);
   if (!parsed.success) return c.json({ error: 'invalid comment' }, 400);
+  if (!upload.images.ok) return c.json({ error: upload.images.error }, 400);
+  if (parsed.data.body.trim().length === 0 && upload.images.images.length === 0) {
+    return c.json({ error: 'write a comment or attach an image' }, 400);
+  }
 
   const version = db
     .select()
@@ -388,6 +430,7 @@ apiRoutes.post('/api/docs/:slug/comments', async (c) => {
     quotedText: parsed.data.quotedText,
     anchor: parsed.data.anchor,
     via: null,
+    images: upload.images.images,
   });
 
   return c.json(buildThread(db, created, version.id, doc, user.id), 201);
@@ -399,7 +442,8 @@ apiRoutes.post('/api/comments/:id/replies', async (c) => {
   const parentId = c.req.param('id');
 
   // Body first, access second — same revocation-race guard as comment create.
-  const parsed = replySchema.safeParse(await readJson(c));
+  const upload = await readCommentUpload(c);
+  const parsed = replySchema.safeParse(upload.json);
 
   const parent = db.select().from(comments).where(eq(comments.id, parentId)).get();
   if (!parent || parent.parentId !== null) return c.json({ error: 'not found' }, 404);
@@ -409,8 +453,12 @@ apiRoutes.post('/api/comments/:id/replies', async (c) => {
   if (!resolveDocumentAccess(db, doc.id, user.id)?.canComment) return c.json({ error: 'editor permission required' }, 403);
 
   if (!parsed.success) return c.json({ error: 'invalid reply' }, 400);
+  if (!upload.images.ok) return c.json({ error: upload.images.error }, 400);
+  if (parsed.data.body.trim().length === 0 && upload.images.images.length === 0) {
+    return c.json({ error: 'write a reply or attach an image' }, 400);
+  }
 
-  const reply = createReply(db, { parent, authorId: user.id, body: parsed.data.body, via: null });
+  const reply = createReply(db, { parent, authorId: user.id, body: parsed.data.body, via: null, images: upload.images.images });
 
   return c.json(
     {
@@ -419,6 +467,7 @@ apiRoutes.post('/api/comments/:id/replies', async (c) => {
       author: authorFor(db, reply, doc.teamId),
       createdAt: reply.createdAt,
       mentions: mentionsFor(db, reply.body, doc, reply.authorId),
+      images: imagesForComments(db, [reply.id]).get(reply.id) ?? [],
     },
     201,
   );
@@ -442,6 +491,9 @@ apiRoutes.patch('/api/comments/:id', async (c) => {
   if (!resolveDocumentAccess(db, doc.id, user.id)?.canComment) return c.json({ error: 'editor permission required' }, 403);
   if (comment.authorId !== user.id) return c.json({ error: 'only the author can edit a comment' }, 403);
   if (!parsed.success) return c.json({ error: 'invalid comment' }, 400);
+  if (parsed.data.body.length === 0 && !imagesForComments(db, [comment.id]).has(comment.id)) {
+    return c.json({ error: 'invalid comment' }, 400);
+  }
 
   const edited = editComment(db, { comment, document: doc, body: parsed.data.body });
   const thread = edited.parentId ? db.select().from(comments).where(eq(comments.id, edited.parentId)).get() : edited;
@@ -483,6 +535,27 @@ apiRoutes.post('/api/comments/:id/reopen', async (c) => {
   if (!updated) return c.json({ error: 'internal error' }, 500);
 
   return c.json(buildThread(db, updated, found.document.currentVersionId ?? undefined, found.document, user.id));
+});
+
+/**
+ * An image attached to a comment or reply, for anyone who can read its
+ * document. The bytes were sniffed on upload and never change, so the
+ * browser may keep them; the CSP and `nosniff` are belt and braces for a
+ * file served from the app origin.
+ */
+apiRoutes.get('/api/comment-images/:id', (c) => {
+  const db = c.get('db');
+  const user = c.get('user');
+  const image = db.select().from(commentImages).where(eq(commentImages.id, c.req.param('id'))).get();
+  const comment = image ? db.select().from(comments).where(eq(comments.id, image.commentId)).get() : undefined;
+  if (!image || !comment || !findDocumentForViewer(db, comment.documentId, user.id)) return c.json({ error: 'not found' }, 404);
+  return c.body(new Uint8Array(image.data), 200, {
+    'Content-Type': image.mime,
+    'Content-Security-Policy': "sandbox; default-src 'none'",
+    'X-Content-Type-Options': 'nosniff',
+    'Cross-Origin-Resource-Policy': 'same-origin',
+    'Cache-Control': 'private, max-age=86400',
+  });
 });
 
 /**
@@ -605,11 +678,13 @@ function commentsMarkdown(db: DB, baseUrl: string, doc: Document): string {
   const authorName = (author: AuthorDTO): string => (author.viaToken ? `${author.email} (via ${author.viaToken.label})` : author.email);
   const renderSection = (title: string, items: ThreadDTO[]): void => {
     lines.push(`## ${title}`, '');
+    const imageNote = (images: CommentImageDTO[]): string =>
+      images.length === 0 ? '' : ` (${images.map((image, i) => `[image ${i + 1}](${baseUrl}${image.url})`).join(', ')})`;
     for (const thread of items) {
       const state = thread.anchorState?.state ?? 'orphaned';
-      lines.push(`- **${authorName(thread.author)}** on "${thread.quotedText}" (${state}): ${thread.body}${reactionNote(thread.reactions)}`);
+      lines.push(`- **${authorName(thread.author)}** on "${thread.quotedText}" (${state}): ${thread.body}${imageNote(thread.images)}${reactionNote(thread.reactions)}`);
       for (const reply of thread.replies) {
-        lines.push(`  - **${authorName(reply.author)}**: ${reply.body}${reactionNote(reply.reactions)}`);
+        lines.push(`  - **${authorName(reply.author)}**: ${reply.body}${imageNote(reply.images)}${reactionNote(reply.reactions)}`);
       }
     }
     lines.push('');

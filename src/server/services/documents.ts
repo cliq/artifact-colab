@@ -9,7 +9,7 @@ import { eq, inArray } from 'drizzle-orm';
 
 import { pruneDocumentWatches } from './access.js';
 import type { DB, DBOrTx } from '../db/index.js';
-import { documentCollaborators, documentInvitations, assets, commentAnchorStates, commentReactions, comments, documents, versions, watches, type Document } from '../db/schema.js';
+import { documentCollaborators, documentInvitations, assets, commentAnchorStates, commentImages, commentReactions, comments, documents, versions, watches, type Document } from '../db/schema.js';
 
 export type DocumentVisibility = 'team' | 'public' | 'private';
 
@@ -27,7 +27,7 @@ export function setDocumentVisibility(db: DBOrTx, document: Document, visibility
 
 /**
  * Deletes documents and everything scoped to them: versions, assets, comments
- * (with their anchor states), and watches. `watches` has no ON DELETE CASCADE,
+ * (with their anchor states, reactions and images), and watches. `watches` has no ON DELETE CASCADE,
  * so everything is deleted explicitly, children first. Runs inside the
  * caller's transaction.
  */
@@ -43,6 +43,7 @@ export function deleteDocumentsWithin(tx: DBOrTx, docIds: string[]): void {
   if (commentIds.length > 0) {
     tx.delete(commentAnchorStates).where(inArray(commentAnchorStates.commentId, commentIds)).run();
     tx.delete(commentReactions).where(inArray(commentReactions.commentId, commentIds)).run();
+    tx.delete(commentImages).where(inArray(commentImages.commentId, commentIds)).run();
   }
   tx.delete(comments).where(inArray(comments.documentId, docIds)).run();
   tx.delete(watches).where(inArray(watches.documentId, docIds)).run();

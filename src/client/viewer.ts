@@ -12,6 +12,7 @@ import { AnnotatorBridge } from './bridge.js';
 import { initCompare } from './compare.js';
 import { FrameScaler } from './frameScale.js';
 import { loadFrame, persistFrameStorage } from './frameStorage.js';
+import { AttachmentTray, COMMENT_IMAGES_CSS, commentRequestBody, imageStrip, type CommentImageDTO } from './commentImages.js';
 import { COMMENT_MARKDOWN_CSS, renderCommentBody } from './commentMarkdown.js';
 import { MENTION_CSS, MENTION_OPEN_ATTR, MentionPicker, type Mentionable, type MentionDTO } from './mentions.js';
 import { initMovePickers, showStoredProjectFeedback } from './projectPicker.js';
@@ -84,6 +85,7 @@ interface ReplyDTO {
   reactions: ReactionDTO[];
   /** Teammates the body mentions as `@email`; painted as chips. */
   mentions: MentionDTO[];
+  images: CommentImageDTO[];
 }
 
 interface AnchorStateDTO {
@@ -107,6 +109,7 @@ interface ThreadDTO {
   anchorState: AnchorStateDTO | null;
   reactions: ReactionDTO[];
   mentions: MentionDTO[];
+  images: CommentImageDTO[];
   replies: ReplyDTO[];
 }
 
@@ -122,7 +125,7 @@ const SIDEBAR_CSS = `
 .aligned-zone.scrolling .thread-card.aligned { transition-property: border-color, box-shadow; }
 /* Unfocused cards collapse to a summary so many comments fit beside their anchors; clicking one expands it. */
 .thread-card.collapsed .thread-body { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; margin-bottom: 0; }
-.thread-card.collapsed .replies, .thread-card.collapsed .reply-form, .thread-card.collapsed .thread-actions { display: none; }
+.thread-card.collapsed .replies, .thread-card.collapsed .reply-form, .thread-card.collapsed .reply-attachments, .thread-card.collapsed .thread-actions { display: none; }
 .thread-card .thread-collapsed-info { display: none; font-size: 11px; color: var(--color-muted); margin-top: 6px; }
 .thread-card.collapsed .thread-collapsed-info:not(:empty) { display: block; }
 /* Cards whose anchor is scrolled out of view shrink to a one-line stub pinned at the sidebar's edge. */
@@ -184,6 +187,9 @@ button.ac-btn-primary:hover { background: var(--color-accent-hover); }
 #ac-composer { border: 1px solid var(--color-accent-bright); border-radius: var(--radius-md); background: var(--color-surface); padding: 10px; margin-bottom: 16px; }
 #ac-composer textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px; border: 1px solid var(--color-rule-2); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text); resize: vertical; min-height: 60px; margin: 6px 0; }
 .composer-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.composer-actions > .attach-control { margin-right: auto; }
+#ac-composer .attach-tray { margin-bottom: 6px; }
+.reply-attachments { margin-top: 4px; }
 /* Resolved threads (Resolved/All filters) read as history: muted, with a grey quote bar. */
 .thread-card.resolved { background: var(--color-bg); }
 .thread-card.resolved .thread-quote { border-left-color: var(--color-rule-2); }
@@ -307,7 +313,7 @@ function formatTime(iso: string): string {
 function injectStyles(): void {
   const style = document.createElement('style');
   style.setAttribute('data-artifact-viewer', '');
-  style.textContent = SIDEBAR_CSS + MENTION_CSS + COMMENT_MARKDOWN_CSS;
+  style.textContent = SIDEBAR_CSS + MENTION_CSS + COMMENT_MARKDOWN_CSS + COMMENT_IMAGES_CSS;
   document.head.appendChild(style);
 }
 
@@ -694,8 +700,9 @@ function init(): void {
   let threads: ThreadDTO[] = [];
   let lastJson: string | null = null;
   const liveStates = new Map<string, AnchorState>();
-  /** In-progress reply text per thread, so re-renders don't lose typing. */
+  /** In-progress reply text and attached images per thread, so re-renders don't lose them. */
   const replyDrafts = new Map<string, string>();
+  const replyImages = new Map<string, File[]>();
   /** The comment or reply the viewer is editing, with its in-progress text (survives re-renders). */
   let editing: { id: string; draft: string } | null = null;
   let focusedCommentId: string | null = null;
@@ -722,19 +729,27 @@ function init(): void {
   mentionPicker.attach(composerTextarea);
   submitOnEnter(composerTextarea, () => void saveComment());
   const composerError = el('div', { className: 'ac-error' });
+  const composerTray = new AttachmentTray((message) => {
+    composerError.textContent = message;
+  });
+  composerTray.attachTo(composerTextarea);
+  composerTray.control.className = 'attach-control';
   const composer = el(
     'div',
     { attrs: { id: 'ac-composer' } },
     [
       composerQuote,
       composerTextarea,
+      composerTray.element,
       composerError,
       el('div', { className: 'composer-actions' }, [
+        composerTray.control,
         el('button', {
           className: 'ac-btn',
           text: 'Cancel',
           onClick: () => {
             composerTextarea.value = '';
+            composerTray.clear();
             hideComposer();
           },
         }),
@@ -768,19 +783,21 @@ function init(): void {
 
   async function saveComment(): Promise<void> {
     const body = composerTextarea.value.trim();
-    if (!body || !pendingAnchor) return;
-    const res = await postJson(`/api/docs/${data.slug}/comments`, {
-      body,
-      quotedText: pendingQuotedText,
-      anchor: pendingAnchor,
-      versionId: data.versionId,
-    });
+    const images = composerTray.selected;
+    if ((!body && images.length === 0) || !pendingAnchor) return;
+    composerError.textContent = '';
+    const res = await postComment(
+      `/api/docs/${data.slug}/comments`,
+      { body, quotedText: pendingQuotedText, anchor: pendingAnchor, versionId: data.versionId },
+      images,
+    );
     if (res.ok) {
       composerTextarea.value = '';
+      composerTray.clear();
       hideComposer();
       await fetchComments();
     } else {
-      composerError.textContent = 'Could not save comment.';
+      composerError.textContent = res.error ?? 'Could not save comment.';
     }
   }
 
@@ -796,6 +813,22 @@ function init(): void {
 
   function postJson(path: string, body?: unknown): Promise<{ ok: boolean; status: number }> {
     return sendJson('POST', path, body);
+  }
+
+  /** A new comment or reply, with its images when any are attached; `error` is the server's reason on a 400. */
+  async function postComment(path: string, payload: unknown, images: File[]): Promise<{ ok: boolean; error: string | null }> {
+    const { body, contentType } = commentRequestBody(payload, images);
+    const headers: Record<string, string> = { 'x-csrf-token': data.csrfToken };
+    if (contentType) headers['content-type'] = contentType;
+    try {
+      const res = await fetch(path, { method: 'POST', headers, body });
+      if (res.ok) return { ok: true, error: null };
+      if (res.status === 413) return { ok: false, error: 'Those images are too large to upload together.' };
+      const reason: unknown = await res.json().catch(() => null);
+      return { ok: false, error: res.status === 400 ? errorText(reason, '') || null : null };
+    } catch {
+      return { ok: false, error: null };
+    }
   }
 
   /**
@@ -1001,7 +1034,7 @@ function init(): void {
   }
 
   /** A comment or reply body, or — while the viewer edits it — a textarea with Save/Cancel. */
-  function editableBody(id: string, body: string, mentions: MentionDTO[], className: string): HTMLElement {
+  function editableBody(id: string, body: string, mentions: MentionDTO[], className: string, hasImages: boolean): HTMLElement {
     if (editing?.id !== id) return el('div', { className: `${className} md-body` }, renderCommentBody(body, mentions));
 
     const error = el('div', { className: 'ac-error' });
@@ -1021,7 +1054,7 @@ function init(): void {
 
     async function save(): Promise<void> {
       const value = textarea.value.trim();
-      if (!value) return;
+      if (!value && !hasImages) return;
       if (value === body.trim()) return cancelEdit();
       const res = await sendJson('PATCH', `/api/comments/${id}`, { body: value });
       if (res.ok) {
@@ -1090,7 +1123,8 @@ function init(): void {
           })
         : null;
 
-    const body = editableBody(thread.id, thread.body, thread.mentions ?? [], 'thread-body');
+    const body = editableBody(thread.id, thread.body, thread.mentions ?? [], 'thread-body', thread.images.length > 0);
+    const images = imageStrip(thread.images);
     const reactions = reactionsBar(thread.id, thread.reactions);
 
     const repliesEl = el('div', { className: 'replies' });
@@ -1098,7 +1132,8 @@ function init(): void {
       repliesEl.appendChild(
         el('div', { className: 'reply' }, [
           authorMeta(reply.author, reply.createdAt, reply.editedAt, editAction(reply.id, reply.author, reply.body)),
-          editableBody(reply.id, reply.body, reply.mentions ?? [], 'reply-body'),
+          editableBody(reply.id, reply.body, reply.mentions ?? [], 'reply-body', reply.images.length > 0),
+          ...(reply.images.length > 0 ? [imageStrip(reply.images)!] : []),
           reactionsBar(reply.id, reply.reactions),
         ]),
       );
@@ -1120,21 +1155,38 @@ function init(): void {
       bridge.scrollToAnchor(thread.id);
     });
     mentionPicker.attach(replyTextarea);
+    const replyTray = new AttachmentTray(
+      (message) => {
+        replyError.textContent = message;
+      },
+      (files) => {
+        if (files.length > 0) replyImages.set(thread.id, files);
+        else replyImages.delete(thread.id);
+      },
+      true,
+    );
+    replyTray.set(replyImages.get(thread.id) ?? []);
+    replyTray.attachTo(replyTextarea);
+    replyTray.element.classList.add('reply-attachments');
     async function submitReply(): Promise<void> {
       const value = replyTextarea.value.trim();
-      if (!value) return;
-      const res = await postJson(`/api/comments/${thread.id}/replies`, { body: value });
+      const images = replyTray.selected;
+      if (!value && images.length === 0) return;
+      replyError.textContent = '';
+      const res = await postComment(`/api/comments/${thread.id}/replies`, { body: value }, images);
       if (res.ok) {
         replyTextarea.value = '';
         replyDrafts.delete(thread.id);
+        replyTray.clear();
         await fetchComments();
       } else {
-        replyError.textContent = 'Could not post reply.';
+        replyError.textContent = res.error ?? 'Could not post reply.';
       }
     }
     submitOnEnter(replyTextarea, () => void submitReply());
     const replyForm = el('div', { className: 'reply-form' }, [
       replyTextarea,
+      replyTray.control,
       el('button', {
         className: 'ac-btn',
         text: 'Reply',
@@ -1199,10 +1251,11 @@ function init(): void {
         meta,
         ...(resolvedMeta ? [resolvedMeta] : []),
         body,
+        ...(images ? [images] : []),
         reactions,
         collapsedInfo,
         repliesEl,
-        ...(data.access.canComment ? [replyForm, actions] : []),
+        ...(data.access.canComment ? [replyForm, replyTray.element, actions] : []),
       ],
     );
     return card;
@@ -1607,7 +1660,7 @@ function init(): void {
         pendingAnchor = anchor;
         pendingQuotedText = quotedText;
         showComposer(quotedText);
-      } else if (composerTextarea.value.trim().length === 0) {
+      } else if (composerTextarea.value.trim().length === 0 && composerTray.selected.length === 0) {
         hideComposer();
       }
     },

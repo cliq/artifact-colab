@@ -107,7 +107,7 @@ describe('mcp', () => {
     expect(lastUsed()).not.toBeNull();
   });
 
-  test('lists the nine tools', async () => {
+  test('lists the ten tools', async () => {
     const result = await rpcResult(await rpc('tools/list', {}));
     const names = result.tools.map((t: any) => t.name).sort();
     expect(names).toEqual([
@@ -115,6 +115,7 @@ describe('mcp', () => {
       'delete_artifact',
       'edit_comment',
       'get_artifact',
+      'get_comment_image',
       'get_comments',
       'list_projects',
       'move_artifact',

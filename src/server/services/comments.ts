@@ -6,7 +6,7 @@
  * whether the comment is attributed to an access token. Both also subscribe
  * every person the author is authorized to mention (`@email`), so the mention
  * reaches them by digest. Authors can later edit the body of their own
- * comments and replies.
+ * comments and replies; images attached at creation stay as they are.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -18,6 +18,7 @@ import { describeTextAnchor, type TextAnchor } from '../../anchoring/text.js';
 import type { DB } from '../db/index.js';
 import { comments, documents, type Comment, type Document, type Version } from '../db/schema.js';
 import { computeForComment, computeForCommentVersion } from './anchorStates.js';
+import { insertCommentImages, type ValidImage } from './commentImages.js';
 import { autoWatch, resolveMentions, watchForMention } from './watches.js';
 
 /** The access token a comment was posted through — how the UI tells one agent from another. */
@@ -36,6 +37,8 @@ export function createThreadComment(
     quotedText: string;
     anchor: TextAnchor;
     via: CommentVia | null;
+    /** Already validated (see `validateCommentImages`). */
+    images?: ValidImage[];
     now?: Date;
   },
 ): Comment {
@@ -60,6 +63,8 @@ export function createThreadComment(
     })
     .run();
 
+  insertCommentImages(db, id, input.images ?? [], now);
+
   // The state against the version it was created on, plus the state against
   // the document's current version (the two may already be the same row).
   computeForCommentVersion(db, id, input.version.id);
@@ -74,7 +79,7 @@ export function createThreadComment(
 
 export function createReply(
   db: DB,
-  input: { parent: Comment; authorId: string; body: string; via: CommentVia | null; now?: Date },
+  input: { parent: Comment; authorId: string; body: string; via: CommentVia | null; images?: ValidImage[]; now?: Date },
 ): Comment {
   const id = randomBytes(8).toString('hex');
   const now = input.now ?? new Date();
@@ -97,6 +102,7 @@ export function createReply(
       viaTokenLabel: input.via?.tokenLabel ?? null,
     })
     .run();
+  insertCommentImages(db, id, input.images ?? [], now);
 
   autoWatch(db, input.parent.documentId, input.authorId, now);
   const doc = db.select().from(documents).where(eq(documents.id, input.parent.documentId)).get();

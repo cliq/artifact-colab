@@ -33,6 +33,9 @@ import { BackupManager } from './services/backups.js';
 const PUBLISH_MAX_BODY_BYTES = 40 * 1024 * 1024;
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 const PUBLISH_BODY_PATHS = new Set(['/api/publish', '/mcp']);
+// New comments and replies may carry up to four 5 MB images as multipart.
+const COMMENT_MAX_BODY_BYTES = 24 * 1024 * 1024;
+const COMMENT_UPLOAD_PATH = /^\/api\/(docs\/[^/]+\/comments|comments\/[^/]+\/replies)$/;
 
 export function createApp(deps: { db: DB; config: Config; backups?: BackupManager }): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -46,10 +49,12 @@ export function createApp(deps: { db: DB; config: Config; backups?: BackupManage
   });
 
   const publishBodyLimit = bodyLimit({ maxSize: PUBLISH_MAX_BODY_BYTES });
+  const commentBodyLimit = bodyLimit({ maxSize: COMMENT_MAX_BODY_BYTES });
   const defaultBodyLimit = bodyLimit({ maxSize: DEFAULT_MAX_BODY_BYTES });
   app.use('*', (c, next) => {
     const path = new URL(c.req.url).pathname;
-    return ((PUBLISH_BODY_PATHS.has(path) || /^\/api\/docs\/[^/]+\/versions$/.test(path)) ? publishBodyLimit : defaultBodyLimit)(c, next);
+    if (PUBLISH_BODY_PATHS.has(path) || /^\/api\/docs\/[^/]+\/versions$/.test(path)) return publishBodyLimit(c, next);
+    return (COMMENT_UPLOAD_PATH.test(path) ? commentBodyLimit : defaultBodyLimit)(c, next);
   });
 
   app.use('*', csrfProtect());

@@ -1,6 +1,7 @@
 /**
  * MCP endpoint (Streamable HTTP, stateless) exposing publish_artifact,
- * get_artifact, Project discovery and moves, comments, and deletion. Auth is
+ * get_artifact, Project discovery and moves, comments (with their images),
+ * and deletion. Auth is
  * a personal access token via `Authorization:
  * Bearer` — the bearerAuth middleware resolves the user and token, and both
  * ride into the per-request McpServer instance through `authInfo.extra`
@@ -17,7 +18,7 @@ import type { Config } from './config.js';
 import type { AppEnv } from './context.js';
 import type { DB } from './db/index.js';
 import type { Token, User } from './db/schema.js';
-import { comments, tokens, teamMembers } from './db/schema.js';
+import { commentImages, comments, tokens, teamMembers } from './db/schema.js';
 import { bearerAuth } from './middleware.js';
 import {
   buildThread,
@@ -32,6 +33,7 @@ import { resolveDocumentAccess } from './services/access.js';
 import { assetsForDocument } from './services/assets.js';
 import type { IncomingAsset } from './services/assets.js';
 import { indexVersionHtml } from './services/anchorStates.js';
+import { MAX_COMMENT_IMAGE_BYTES, MAX_COMMENT_IMAGES, validateCommentImages } from './services/commentImages.js';
 import { createReply, createThreadComment, editComment, locateQuote, type CommentVia } from './services/comments.js';
 import { deleteDocumentCascade } from './services/documents.js';
 import { publishArtifact } from './services/publish.js';
@@ -267,7 +269,9 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       title: 'Get comments',
       description:
         'Fetch comment threads on a document as structured JSON: quoted text, anchor context, author, replies, resolution status, ' +
-        "and each comment's anchor state on the current version (anchored / ambiguous / orphaned). Bodies are Markdown.",
+        "and each comment's anchor state on the current version (anchored / ambiguous / orphaned). Bodies are Markdown. " +
+        'Images attached to a comment or reply are listed in its `images` array (id, mime, size) — their `url` needs a browser session, ' +
+        'so view them with get_comment_image instead; they are often screenshots that explain the comment.',
       inputSchema: z.object({
         document_id: z.string(),
         status: z.enum(['open', 'resolved']).optional().describe('Filter by thread status; omit for all'),
@@ -310,9 +314,12 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         'are normalized, but the quote must occur exactly once; if it appears several times, extend it with surrounding words. ' +
         '(2) Reply: pass comment_id of an existing thread (from get_comments); passing a reply id lands the reply on its thread. ' +
         'To tag a teammate, write their email with a leading @ in the body (e.g. "@bob@example.com please review"): they are ' +
-        'subscribed to the artifact and receive the comment by email.',
+        'subscribed to the artifact and receive the comment by email. ' +
+        `Attach up to ${MAX_COMMENT_IMAGES} images (PNG, JPEG, GIF or WebP, ${MAX_COMMENT_IMAGE_BYTES / (1024 * 1024)} MB each) in \`images\`, ` +
+        'e.g. a screenshot of what the comment is about; they show as thumbnails under the body. The body may be empty when images are attached. ' +
+        'Images are fixed once posted: edit_comment changes only the text.',
       inputSchema: z.object({
-        body: z.string().min(1).max(10000).describe('The comment text, as Markdown'),
+        body: z.string().max(10000).describe('The comment text, as Markdown; may be empty only when images are attached'),
         document_id: z.string().optional().describe('Document to open a new thread on; required together with quoted_text'),
         quoted_text: z
           .string()
@@ -320,10 +327,22 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
           .optional()
           .describe('Passage of the current version the new thread anchors to; must match the visible text exactly once'),
         comment_id: z.string().optional().describe('Existing comment to reply to, instead of document_id + quoted_text'),
+        images: z
+          .array(z.object({ data_base64: z.string().describe('Base64-encoded image file (PNG, JPEG, GIF or WebP)') }))
+          .max(MAX_COMMENT_IMAGES)
+          .optional()
+          .describe(`Up to ${MAX_COMMENT_IMAGES} images to attach, shown in this order`),
       }),
     },
-    async ({ body, document_id, quoted_text, comment_id }) => {
+    async ({ body, document_id, quoted_text, comment_id, images: incomingImages }) => {
       if (!used()) return toolError('token is no longer authorized');
+      const validated = validateCommentImages(
+        (incomingImages ?? []).map((image, i) => ({ label: `image ${i + 1}`, data: Buffer.from(image.data_base64, 'base64') })),
+      );
+      if (!validated.ok) return toolError(validated.error);
+      const images = validated.images;
+      if (body.trim().length === 0 && images.length === 0) return toolError('body is empty; write the comment or attach an image');
+      const imageNote = images.length === 0 ? '' : ` with ${images.length} image${images.length === 1 ? '' : 's'}`;
       if (comment_id !== undefined) {
         if (quoted_text !== undefined) {
           return toolError('pass either comment_id (to reply) or document_id + quoted_text (to open a new thread), not both');
@@ -336,12 +355,12 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         if (document_id !== undefined && document_id !== doc.id) {
           return toolError(`comment ${comment_id} belongs to document ${doc.id}, not ${document_id}`);
         }
-        const reply = createReply(db, { parent: thread, authorId: user.id, body, via });
+        const reply = createReply(db, { parent: thread, authorId: user.id, body, via, images });
         return {
           content: [
             {
               type: 'text',
-              text: `Reply ${reply.id} added to thread ${thread.id} on "${doc.title}" (${config.baseUrl}/d/${doc.id}), attributed to ${user.email} via token "${token.label}".`,
+              text: `Reply ${reply.id}${imageNote} added to thread ${thread.id} on "${doc.title}" (${config.baseUrl}/d/${doc.id}), attributed to ${user.email} via token "${token.label}".`,
             },
           ],
         };
@@ -381,16 +400,41 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         quotedText: located.quotedText,
         anchor: located.anchor,
         via,
+        images,
       });
       return {
         content: [
           {
             type: 'text',
             text:
-              `Comment ${created.id} added on version ${version.number} of "${doc.title}" (${config.baseUrl}/d/${doc.id}), ` +
+              `Comment ${created.id}${imageNote} added on version ${version.number} of "${doc.title}" (${config.baseUrl}/d/${doc.id}), ` +
               `anchored to "${located.quotedText}", attributed to ${user.email} via token "${token.label}". ` +
               `Reply to it later with add_comment({ comment_id: "${created.id}" }).`,
           },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
+    'get_comment_image',
+    {
+      title: 'Get comment image',
+      description:
+        'View an image attached to a comment or reply, by the image id listed in its `images` array from get_comments. ' +
+        'Returns the image itself.',
+      inputSchema: z.object({ image_id: z.string().describe('Image id from get_comments') }),
+    },
+    async ({ image_id }) => {
+      if (!used()) return toolError('token is no longer authorized');
+      const image = db.select().from(commentImages).where(eq(commentImages.id, image_id)).get();
+      const comment = image ? db.select().from(comments).where(eq(comments.id, image.commentId)).get() : undefined;
+      const doc = comment ? findDocumentInTeam(db, comment.documentId, teamId, user.id) : undefined;
+      if (!image || !comment || !doc) return toolError(`unknown image_id: ${image_id}`);
+      return {
+        content: [
+          { type: 'text', text: `Image ${image.position + 1} on comment ${comment.id} of "${doc.title}" (${config.baseUrl}/d/${doc.id}).` },
+          { type: 'image', data: image.data.toString('base64'), mimeType: image.mime },
         ],
       };
     },

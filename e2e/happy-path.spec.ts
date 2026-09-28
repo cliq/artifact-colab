@@ -472,6 +472,68 @@ test.describe('happy path', () => {
     await expect(composer).toBeHidden();
   });
 
+  test('a comment carries up to four images, and a thumbnail opens a zoomable lightbox', async () => {
+    // A real image larger than the window, so "fit to screen" actually shrinks it.
+    const png = Buffer.from(
+      await page.evaluate(() => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 2400;
+        canvas.height = 1800;
+        const ctx = canvas.getContext('2d')!;
+        ctx.fillStyle = '#4f46e5';
+        ctx.fillRect(0, 0, 2400, 1800);
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillRect(1100, 800, 200, 200);
+        return canvas.toDataURL('image/png').split(',')[1]!;
+      }),
+      'base64',
+    );
+    const file = (name: string) => ({ name, mimeType: 'image/png', buffer: png });
+
+    await page.frameLocator('#artifact-frame').locator('#dbltarget').dblclick();
+    const composer = page.locator('#ac-composer');
+    await expect(composer).toBeVisible();
+
+    // Five picked at once: four are kept and the fifth is refused.
+    await composer.locator('input[type="file"]').setInputFiles([1, 2, 3, 4, 5].map((n) => file(`shot-${n}.png`)));
+    await expect(composer.locator('.attach-preview')).toHaveCount(4);
+    await expect(composer.locator('.ac-error')).toContainText('at most 4 images');
+    await expect(composer.locator('.attach-btn')).toBeDisabled();
+    for (let i = 0; i < 2; i++) await composer.locator('.attach-remove').first().click();
+    await expect(composer.locator('.attach-preview')).toHaveCount(2);
+
+    await composer.locator('textarea').fill('Screenshots of the glitch');
+    await composer.locator('button:has-text("Save")').click();
+    await expect(composer).toBeHidden();
+
+    const card = page.locator('.thread-card', { hasText: 'Screenshots of the glitch' });
+    await card.click();
+    const thumbs = card.locator('.comment-images img');
+    await expect(thumbs).toHaveCount(2);
+    await expect.poll(() => thumbs.first().evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(2400);
+
+    await card.locator('.comment-images button').nth(1).click();
+    const lightbox = page.locator('.ac-lightbox');
+    await expect(lightbox).toBeVisible();
+    await expect(lightbox).toContainText('2 / 2');
+    const stage = lightbox.locator('.ac-lightbox-stage');
+    await expect(stage).toHaveClass(/zoomable/);
+    const shown = stage.locator('img');
+    const fitted = await shown.evaluate((img: HTMLImageElement) => img.clientWidth);
+    expect(fitted).toBeLessThan(2400);
+
+    await shown.click();
+    await expect(stage).toHaveClass(/zoomed/);
+    await expect.poll(() => shown.evaluate((img: HTMLImageElement) => img.clientWidth)).toBe(2400);
+    await shown.click();
+    await expect(stage).not.toHaveClass(/zoomed/);
+
+    await page.keyboard.press('ArrowRight');
+    await expect(lightbox).toContainText('1 / 2');
+    await page.keyboard.press('Escape');
+    await expect(lightbox).toHaveCount(0);
+  });
+
   test('compare mode paints removals and additions in two frames and lists the changes', async () => {
     // Republish with one sentence rewritten and a paragraph appended; the
     // client-side rewrite of #live is identical in both, so it must not show up.

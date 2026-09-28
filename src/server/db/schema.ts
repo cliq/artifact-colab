@@ -384,6 +384,30 @@ export const commentReactions = sqliteTable(
 );
 
 export type CommentReaction = typeof commentReactions.$inferSelect;
+
+/**
+ * Images attached to a comment or reply (at most `MAX_COMMENT_IMAGES`, set at
+ * creation). Stored in the database like artifact assets, so backups carry
+ * them; `position` keeps the order they were attached in. Only raster formats
+ * whose bytes were sniffed server-side are accepted — never SVG.
+ */
+export const commentImages = sqliteTable(
+  'comment_images',
+  {
+    id: text('id').primaryKey(),
+    commentId: text('comment_id')
+      .notNull()
+      .references(() => comments.id),
+    position: integer('position').notNull(),
+    mime: text('mime').notNull(),
+    data: blob('data', { mode: 'buffer' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [index('comment_images_comment_id_idx').on(table.commentId)],
+);
+
+export type CommentImage = typeof commentImages.$inferSelect;
+
 export type NewCommentAnchorState = typeof commentAnchorStates.$inferInsert;
 
 export const watches = sqliteTable(

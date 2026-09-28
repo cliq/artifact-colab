@@ -34,6 +34,7 @@ describe('db', () => {
       [
         'assets',
         'comment_anchor_states',
+        'comment_images',
         'comment_reactions',
         'comments',
         'document_collaborators',
