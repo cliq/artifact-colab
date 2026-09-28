@@ -534,6 +534,30 @@ test.describe('happy path', () => {
     await expect(lightbox).toHaveCount(0);
   });
 
+  test('deleting a comment with a reply leaves a placeholder until the reply goes too', async () => {
+    const card = page.locator('.thread-card', { hasText: 'Screenshots of the glitch' });
+    await card.click();
+    await card.locator('.reply-form textarea').fill('Fixed in the next version');
+    await card.locator('.reply-form button:has-text("Reply")').click();
+    const reply = card.locator('.reply', { hasText: 'Fixed in the next version' });
+    await expect(reply).toBeVisible();
+
+    page.once('dialog', (dialog) => {
+      expect(dialog.message()).toContain('The replies stay');
+      void dialog.accept();
+    });
+    await card.locator('.thread-meta').first().locator('button:has-text("Delete")').click();
+    const placeholder = page.locator('.thread-card', { hasText: 'This comment was deleted.' });
+    await expect(placeholder).toBeVisible();
+    await expect(placeholder.locator('.comment-images')).toHaveCount(0);
+    await expect(placeholder.locator('.reply', { hasText: 'Fixed in the next version' })).toBeVisible();
+
+    await placeholder.click();
+    page.once('dialog', (dialog) => void dialog.accept());
+    await placeholder.locator('.reply .thread-meta button:has-text("Delete")').click();
+    await expect(placeholder).toHaveCount(0);
+  });
+
   test('compare mode paints removals and additions in two frames and lists the changes', async () => {
     // Republish with one sentence rewritten and a paragraph appended; the
     // client-side rewrite of #live is identical in both, so it must not show up.

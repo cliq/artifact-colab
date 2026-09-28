@@ -232,7 +232,8 @@ export async function runDigestSweep(db: DBOrTx, baseUrl: string, send: DigestSe
       const unseen = fresh.filter((item) => item.createdAt > watch.lastNotifiedAt);
       if (unseen.length === 0) continue;
 
-      const toEmail = unseen.filter((item) => item.authorId !== watch.userId);
+      // A deleted placeholder has nothing left to say (deleted replies are gone already).
+      const toEmail = unseen.filter((item) => item.authorId !== watch.userId && item.deletedAt === null);
       if (toEmail.length > 0) {
         const to = emailOf(watch.userId);
         if (to) {

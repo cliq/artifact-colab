@@ -6,17 +6,18 @@
  * whether the comment is attributed to an access token. Both also subscribe
  * every person the author is authorized to mention (`@email`), so the mention
  * reaches them by digest. Authors can later edit the body of their own
- * comments and replies; images attached at creation stay as they are.
+ * comments and replies (images attached at creation stay as they are), and
+ * delete them.
  */
 
 import { randomBytes } from 'node:crypto';
 
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 
 import { normalizeString } from '../../anchoring/normalize.js';
 import { describeTextAnchor, type TextAnchor } from '../../anchoring/text.js';
-import type { DB } from '../db/index.js';
-import { comments, documents, type Comment, type Document, type Version } from '../db/schema.js';
+import type { DB, DBOrTx } from '../db/index.js';
+import { commentAnchorStates, commentImages, commentReactions, comments, documents, type Comment, type Document, type Version } from '../db/schema.js';
 import { computeForComment, computeForCommentVersion } from './anchorStates.js';
 import { insertCommentImages, type ValidImage } from './commentImages.js';
 import { autoWatch, resolveMentions, watchForMention } from './watches.js';
@@ -126,6 +127,51 @@ export function editComment(db: DB, input: { comment: Comment; document: Documen
   const updated = db.select().from(comments).where(eq(comments.id, input.comment.id)).get();
   if (!updated) throw new Error(`comment ${input.comment.id} vanished after edit`);
   return updated;
+}
+
+/** What `deleteComment` did: removed the comment (and possibly its emptied thread), or kept a thread as a "deleted" placeholder. */
+export type DeleteOutcome = { kind: 'removed'; threadId: string | null } | { kind: 'placeholder'; threadId: string };
+
+/**
+ * Delete a comment or reply, as its author. A top-level comment that still
+ * has replies becomes a placeholder — body, images and reactions go, the
+ * anchor and replies stay — so nobody else's words disappear with it. Anything
+ * else is removed outright, and removing the last reply under a placeholder
+ * removes the thread too. `threadId` is the thread still standing, if any.
+ */
+export function deleteComment(db: DB, comment: Comment, now: Date = new Date()): DeleteOutcome {
+  return db.transaction((tx) => {
+    if (comment.parentId === null) {
+      const hasReplies = tx.select({ id: comments.id }).from(comments).where(eq(comments.parentId, comment.id)).get() !== undefined;
+      if (!hasReplies) {
+        removeComments(tx, [comment.id]);
+        return { kind: 'removed', threadId: null };
+      }
+      tx.delete(commentImages).where(eq(commentImages.commentId, comment.id)).run();
+      tx.delete(commentReactions).where(eq(commentReactions.commentId, comment.id)).run();
+      tx.update(comments).set({ body: '', deletedAt: now }).where(eq(comments.id, comment.id)).run();
+      return { kind: 'placeholder', threadId: comment.id };
+    }
+
+    removeComments(tx, [comment.id]);
+    const parent = tx.select().from(comments).where(eq(comments.id, comment.parentId)).get();
+    if (!parent) return { kind: 'removed', threadId: null };
+    const orphanedPlaceholder =
+      parent.deletedAt !== null && tx.select({ id: comments.id }).from(comments).where(eq(comments.parentId, parent.id)).get() === undefined;
+    if (orphanedPlaceholder) {
+      removeComments(tx, [parent.id]);
+      return { kind: 'removed', threadId: null };
+    }
+    return { kind: 'removed', threadId: parent.id };
+  });
+}
+
+/** Comment rows and everything hanging off them. */
+function removeComments(tx: DBOrTx, ids: string[]): void {
+  tx.delete(commentAnchorStates).where(inArray(commentAnchorStates.commentId, ids)).run();
+  tx.delete(commentReactions).where(inArray(commentReactions.commentId, ids)).run();
+  tx.delete(commentImages).where(inArray(commentImages.commentId, ids)).run();
+  tx.delete(comments).where(inArray(comments.id, ids)).run();
 }
 
 /**

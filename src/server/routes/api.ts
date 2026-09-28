@@ -16,7 +16,7 @@ import { isReactionEmoji, REACTION_EMOJIS } from '../../shared/reactions.js';
 import { resolveDocumentAccess, mentionableUsers, type DocumentAccess } from '../services/access.js';
 import { assetsForDocument, relinkAssets, stripBaseHref } from '../services/assets.js';
 import { imagesForComments, validateCommentImages, type CommentImageDTO, type ValidImage } from '../services/commentImages.js';
-import { createReply, createThreadComment, editComment } from '../services/comments.js';
+import { createReply, createThreadComment, deleteComment, editComment } from '../services/comments.js';
 import { gravatarUrl } from '../services/gravatar.js';
 import { getProjectForUser } from '../services/projects.js';
 import { resolveMentions } from '../services/watches.js';
@@ -241,6 +241,8 @@ export interface ThreadDTO {
   createdAt: Date;
   /** Last time the author edited the body; null when never edited. */
   editedAt: Date | null;
+  /** The author deleted this comment but it has replies: body, images and reactions are gone, the thread stays. */
+  deleted: boolean;
   createdVersionId: string;
   resolvedAt: Date | null;
   resolvedBy: string | null;
@@ -277,6 +279,7 @@ export function buildThread(db: DB, comment: Comment, versionId: string | undefi
     author: authorFor(db, comment, document.teamId),
     createdAt: comment.createdAt,
     editedAt: comment.editedAt,
+    deleted: comment.deletedAt !== null,
     createdVersionId: comment.createdVersionId,
     resolvedAt: comment.resolvedAt,
     resolvedBy: emailFor(db, comment.resolvedBy),
@@ -490,6 +493,7 @@ apiRoutes.patch('/api/comments/:id', async (c) => {
   if (!doc) return c.json({ error: 'not found' }, 404);
   if (!resolveDocumentAccess(db, doc.id, user.id)?.canComment) return c.json({ error: 'editor permission required' }, 403);
   if (comment.authorId !== user.id) return c.json({ error: 'only the author can edit a comment' }, 403);
+  if (comment.deletedAt !== null) return c.json({ error: 'comment was deleted' }, 400);
   if (!parsed.success) return c.json({ error: 'invalid comment' }, 400);
   if (parsed.data.body.length === 0 && !imagesForComments(db, [comment.id]).has(comment.id)) {
     return c.json({ error: 'invalid comment' }, 400);
@@ -499,6 +503,28 @@ apiRoutes.patch('/api/comments/:id', async (c) => {
   const thread = edited.parentId ? db.select().from(comments).where(eq(comments.id, edited.parentId)).get() : edited;
   if (!thread) return c.json({ error: 'internal error' }, 500);
   return c.json(buildThread(db, thread, doc.currentVersionId ?? undefined, doc, user.id));
+});
+
+/**
+ * Delete a comment or reply. Only its author may, and only while they can
+ * still comment on the document. The response is the thread as it stands
+ * afterwards, or null when nothing of it is left.
+ */
+apiRoutes.delete('/api/comments/:id', async (c) => {
+  await c.req.text();
+  const db = c.get('db');
+  const user = c.get('user');
+  const comment = db.select().from(comments).where(eq(comments.id, c.req.param('id'))).get();
+  if (!comment) return c.json({ error: 'not found' }, 404);
+  const doc = findDocumentForViewer(db, comment.documentId, user.id)?.document;
+  if (!doc) return c.json({ error: 'not found' }, 404);
+  if (!resolveDocumentAccess(db, doc.id, user.id)?.canComment) return c.json({ error: 'editor permission required' }, 403);
+  if (comment.authorId !== user.id) return c.json({ error: 'only the author can delete a comment' }, 403);
+  if (comment.deletedAt !== null) return c.json({ error: 'comment was already deleted' }, 400);
+
+  const outcome = deleteComment(db, comment);
+  const thread = outcome.threadId ? db.select().from(comments).where(eq(comments.id, outcome.threadId)).get() : undefined;
+  return c.json({ thread: thread ? buildThread(db, thread, doc.currentVersionId ?? undefined, doc, user.id) : null });
 });
 
 apiRoutes.post('/api/comments/:id/resolve', async (c) => {
@@ -572,6 +598,7 @@ function reactionTarget(
   if (!isReactionEmoji(emoji)) return { error: `unsupported reaction; use one of ${REACTION_EMOJIS.join(' ')}`, status: 400 };
   const comment = db.select().from(comments).where(eq(comments.id, commentId)).get();
   if (!comment) return { error: 'not found', status: 404 };
+  if (comment.deletedAt !== null) return { error: 'comment was deleted', status: 400 };
   const document = findDocumentForViewer(db, comment.documentId, userId)?.document;
   if (!document) return { error: 'not found', status: 404 };
   if (!resolveDocumentAccess(db, document.id, userId)?.canComment) return { error: 'editor permission required', status: 403 };
@@ -682,7 +709,7 @@ function commentsMarkdown(db: DB, baseUrl: string, doc: Document): string {
       images.length === 0 ? '' : ` (${images.map((image, i) => `[image ${i + 1}](${baseUrl}${image.url})`).join(', ')})`;
     for (const thread of items) {
       const state = thread.anchorState?.state ?? 'orphaned';
-      lines.push(`- **${authorName(thread.author)}** on "${thread.quotedText}" (${state}): ${thread.body}${imageNote(thread.images)}${reactionNote(thread.reactions)}`);
+      lines.push(`- **${authorName(thread.author)}** on "${thread.quotedText}" (${state}): ${thread.deleted ? '_(comment deleted)_' : thread.body}${imageNote(thread.images)}${reactionNote(thread.reactions)}`);
       for (const reply of thread.replies) {
         lines.push(`  - **${authorName(reply.author)}**: ${reply.body}${imageNote(reply.images)}${reactionNote(reply.reactions)}`);
       }

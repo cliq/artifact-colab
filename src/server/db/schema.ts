@@ -328,6 +328,13 @@ export const comments = sqliteTable(
     /** Last time the author changed the body; null when never edited. */
     editedAt: integer('edited_at', { mode: 'timestamp_ms' }),
     /**
+     * Set when the author deleted a top-level comment that still has replies:
+     * the body, images and reactions are gone and the thread shows it as
+     * deleted, so the replies keep their context. Comments without replies,
+     * and replies, are removed outright instead.
+     */
+    deletedAt: integer('deleted_at', { mode: 'timestamp_ms' }),
+    /**
      * Set when the comment was posted through the MCP endpoint: the access
      * token that authenticated the call. The label is a snapshot (no FK) so
      * the UI keeps attributing the comment to that agent after the token is

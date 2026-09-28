@@ -107,14 +107,16 @@ Use the same configured `DEV_LOGIN_CODE` for these demo emails, or read their si
 
 ## Good to know
 
-- Connected agents get ten MCP tools: `publish_artifact`, `get_artifact`, `list_projects`, `move_artifact`,
-  `get_comments`, `get_comment_image`, `add_comment`, `edit_comment`, `resolve_comment`, and `delete_artifact` —
-  enough to publish and organize a page, fetch it back, read the team's feedback (screenshots included), join
-  the discussion (open a thread on a quoted passage or reply to one), fix their own comments, close out addressed
-  threads, and clean up.
+- Connected agents get eleven MCP tools: `publish_artifact`, `get_artifact`, `list_projects`, `move_artifact`,
+  `get_comments`, `get_comment_image`, `add_comment`, `edit_comment`, `delete_comment`, `resolve_comment`, and
+  `delete_artifact` — enough to publish and organize a page, fetch it back, read the team's feedback (screenshots
+  included), join the discussion (open a thread on a quoted passage or reply to one), fix or remove their own
+  comments, close out addressed threads, and clean up.
 - Comments an agent posts through MCP are attributed to the token's owner with an "agent" badge naming the access
   token, so a review from Claude Code and one from a second reader model stay distinguishable in the sidebar and in
-  the digest emails. Agents can edit only the comments they posted this way, never what their owner typed.
+  the digest emails. Agents can edit and delete only the comments they posted this way, never what their owner typed.
+- Authors can delete their own comments and replies from the sidebar. A thread that already has replies stays, its
+  first comment shown as deleted, so the replies keep their context; it goes away once its last reply is deleted.
 - Comment bodies are Markdown (GFM), whether typed in the sidebar or posted by an agent. Raw HTML stays literal
   text and Markdown images show as links.
 - Comments and replies can carry up to four images (PNG, JPEG, GIF or WebP, 5 MB each): attach them with the 📎

@@ -34,7 +34,7 @@ import { assetsForDocument } from './services/assets.js';
 import type { IncomingAsset } from './services/assets.js';
 import { indexVersionHtml } from './services/anchorStates.js';
 import { MAX_COMMENT_IMAGE_BYTES, MAX_COMMENT_IMAGES, validateCommentImages } from './services/commentImages.js';
-import { createReply, createThreadComment, editComment, locateQuote, type CommentVia } from './services/comments.js';
+import { createReply, createThreadComment, deleteComment, editComment, locateQuote, type CommentVia } from './services/comments.js';
 import { deleteDocumentCascade } from './services/documents.js';
 import { publishArtifact } from './services/publish.js';
 import { getProjectForUser, moveArtifact, ProjectError, visibleProjectsForTeam } from './services/projects.js';
@@ -270,6 +270,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       description:
         'Fetch comment threads on a document as structured JSON: quoted text, anchor context, author, replies, resolution status, ' +
         "and each comment's anchor state on the current version (anchored / ambiguous / orphaned). Bodies are Markdown. " +
+        'A thread whose first comment its author deleted has `deleted: true` and an empty body; its replies still count. ' +
         'Images attached to a comment or reply are listed in its `images` array (id, mime, size) — their `url` needs a browser session, ' +
         'so view them with get_comment_image instead; they are often screenshots that explain the comment.',
       inputSchema: z.object({
@@ -464,10 +465,43 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       if (!comment.viaTokenId) {
         return toolError(`comment ${comment_id} was typed by ${user.email} in the web UI; agents can only edit comments posted through add_comment`);
       }
+      if (comment.deletedAt !== null) return toolError(`comment ${comment_id} was deleted`);
       editComment(db, { comment, document: doc, body });
       return {
         content: [{ type: 'text', text: `Comment ${comment_id} on "${doc.title}" (${config.baseUrl}/d/${doc.id}) updated.` }],
       };
+    },
+  );
+
+  server.registerTool(
+    'delete_comment',
+    {
+      title: 'Delete comment',
+      description:
+        'Delete a comment or reply that an agent posted as this user (through add_comment with any of their tokens), e.g. one posted ' +
+        'by mistake or on the wrong passage. The same rule as edit_comment applies: comments the user typed in the web UI, and other ' +
+        "people's comments, cannot be deleted. A reply, or a thread without replies, is removed with its images and reactions. " +
+        'A thread that has replies stays, with its first comment shown as deleted, so the replies keep their context; ' +
+        'it disappears once its last reply is deleted. This cannot be undone.',
+      inputSchema: z.object({ comment_id: z.string().describe('The comment or reply to delete (from add_comment or get_comments)') }),
+    },
+    async ({ comment_id }) => {
+      if (!used()) return toolError('token is no longer authorized');
+      const comment = db.select().from(comments).where(eq(comments.id, comment_id)).get();
+      const doc = comment ? findDocumentInTeam(db, comment.documentId, teamId, user.id) : undefined;
+      if (!comment || !doc) return toolError(`unknown comment_id: ${comment_id}`);
+      if (!resolveDocumentAccess(db, doc.id, user.id)?.canComment) return toolError('editor permission required');
+      if (comment.authorId !== user.id) return toolError(`comment ${comment_id} was written by someone else; only its author can delete it`);
+      if (!comment.viaTokenId) {
+        return toolError(`comment ${comment_id} was typed by ${user.email} in the web UI; agents can only delete comments posted through add_comment`);
+      }
+      if (comment.deletedAt !== null) return toolError(`comment ${comment_id} was already deleted`);
+      const outcome = deleteComment(db, comment);
+      const what =
+        outcome.kind === 'placeholder'
+          ? `Comment ${comment_id} deleted; its thread stays, shown as deleted, because it has replies.`
+          : `${comment.parentId ? 'Reply' : 'Comment'} ${comment_id} deleted.`;
+      return { content: [{ type: 'text', text: `${what} ("${doc.title}", ${config.baseUrl}/d/${doc.id})` }] };
     },
   );
 

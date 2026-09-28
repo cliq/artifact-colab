@@ -103,6 +103,8 @@ interface ThreadDTO {
   author: AuthorDTO;
   createdAt: string;
   editedAt: string | null;
+  /** The author deleted it while it had replies; only the thread around it remains. */
+  deleted: boolean;
   createdVersionId: string;
   resolvedAt: string | null;
   resolvedBy: string | null;
@@ -156,6 +158,9 @@ const SIDEBAR_CSS = `
 .thread-meta .edited { cursor: default; }
 .thread-meta .meta-action { font: inherit; font-size: 11px; margin-left: auto; padding: 0; border: none; background: transparent; color: var(--color-muted); cursor: pointer; }
 .thread-meta .meta-action:hover { color: var(--color-accent); text-decoration: underline; }
+.thread-meta .meta-action + .meta-action { margin-left: 8px; }
+.thread-meta .meta-action.danger:hover { color: #b91c1c; }
+.thread-deleted { font-size: 12px; font-style: italic; color: var(--color-muted); margin-bottom: 6px; }
 .thread-card.collapsed .meta-action, .thread-card.stub .edit-form { display: none; }
 .edit-form { margin: 2px 0 6px; }
 .edit-form textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 4px 6px; border: 1px solid var(--color-rule-2); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text); resize: vertical; min-height: 48px; }
@@ -231,9 +236,15 @@ function truncate(text: string, max: number): string {
 
 /**
  * Gravatar + display name (profile name when set, email otherwise) + guest
- * badge + relative time, an "edited" marker, and the author's Edit action.
+ * badge + relative time, an "edited" marker, and the author's Edit and Delete actions.
  */
-function authorMeta(author: AuthorDTO, createdAt: string, editedAt: string | null, onEdit: (() => void) | null): HTMLElement {
+function authorMeta(
+  author: AuthorDTO,
+  createdAt: string,
+  editedAt: string | null,
+  onEdit: (() => void) | null,
+  onDelete: (() => void) | null,
+): HTMLElement {
   const parts: (Node | string)[] = [
     el('img', {
       className: 'avatar',
@@ -271,6 +282,19 @@ function authorMeta(author: AuthorDTO, createdAt: string, editedAt: string | nul
         onClick: (e) => {
           e.stopPropagation();
           onEdit();
+        },
+      }),
+    );
+  }
+  if (onDelete) {
+    parts.push(
+      el('button', {
+        className: 'meta-action danger',
+        text: 'Delete',
+        attrs: { type: 'button' },
+        onClick: (e) => {
+          e.stopPropagation();
+          onDelete();
         },
       }),
     );
@@ -1028,6 +1052,31 @@ function init(): void {
     };
   }
 
+  /**
+   * The Delete action for the viewer's own comments and replies. A thread
+   * with replies stays behind as a placeholder, so the prompt says so.
+   */
+  function deleteAction(id: string, author: AuthorDTO, what: 'comment' | 'reply', replyCount: number, onError: (message: string) => void): (() => void) | null {
+    if (!data.access.canComment || author.email.toLowerCase() !== data.userEmail.toLowerCase()) return null;
+    if (editing?.id === id) return null;
+    return () => {
+      const prompt =
+        what === 'reply'
+          ? 'Delete this reply?'
+          : replyCount > 0
+            ? 'Delete this comment? The replies stay, and the thread shows the comment as deleted.'
+            : 'Delete this comment?';
+      if (!window.confirm(prompt)) return;
+      void (async () => {
+        const res = await sendJson('DELETE', `/api/comments/${id}`);
+        if (!res.ok) return onError(`Could not delete ${what}.`);
+        await fetchComments();
+        // A thread kept as a placeholder stays focused; one that is gone can't be.
+        if (focusedCommentId !== null && !threads.some((t) => t.id === focusedCommentId)) clearFocus();
+      })();
+    };
+  }
+
   function cancelEdit(): void {
     editing = null;
     renderThreads();
@@ -1114,7 +1163,18 @@ function init(): void {
       },
     });
 
-    const meta = authorMeta(thread.author, thread.createdAt, thread.editedAt, editAction(thread.id, thread.author, thread.body));
+    const reportError = (message: string): void => {
+      replyError.textContent = message;
+    };
+    const meta = thread.deleted
+      ? el('div', { className: 'thread-deleted', text: 'This comment was deleted.' })
+      : authorMeta(
+          thread.author,
+          thread.createdAt,
+          thread.editedAt,
+          editAction(thread.id, thread.author, thread.body),
+          deleteAction(thread.id, thread.author, 'comment', thread.replies.length, reportError),
+        );
     const resolvedMeta =
       thread.status === 'resolved'
         ? el('div', {
@@ -1131,7 +1191,13 @@ function init(): void {
     for (const reply of thread.replies) {
       repliesEl.appendChild(
         el('div', { className: 'reply' }, [
-          authorMeta(reply.author, reply.createdAt, reply.editedAt, editAction(reply.id, reply.author, reply.body)),
+          authorMeta(
+            reply.author,
+            reply.createdAt,
+            reply.editedAt,
+            editAction(reply.id, reply.author, reply.body),
+            deleteAction(reply.id, reply.author, 'reply', 0, reportError),
+          ),
           editableBody(reply.id, reply.body, reply.mentions ?? [], 'reply-body', reply.images.length > 0),
           ...(reply.images.length > 0 ? [imageStrip(reply.images)!] : []),
           reactionsBar(reply.id, reply.reactions),
@@ -1250,9 +1316,7 @@ function init(): void {
         quote,
         meta,
         ...(resolvedMeta ? [resolvedMeta] : []),
-        body,
-        ...(images ? [images] : []),
-        reactions,
+        ...(thread.deleted ? [] : [body, ...(images ? [images] : []), reactions]),
         collapsedInfo,
         repliesEl,
         ...(data.access.canComment ? [replyForm, replyTray.element, actions] : []),

@@ -1,0 +1,1 @@
+ALTER TABLE `comments` ADD `deleted_at` integer;
