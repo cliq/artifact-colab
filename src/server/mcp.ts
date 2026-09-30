@@ -209,7 +209,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
     },
     async ({ files }) => {
       if (!used()) return toolError('token is no longer authorized');
-      const prepared = prepareUploads(db, token.id, files.map((f) => ({ name: f.name, mime: f.mime_type })), new Date());
+      const prepared = prepareUploads(db, token, files.map((f) => ({ name: f.name, mime: f.mime_type })), new Date());
       if (!prepared.ok) return toolError(prepared.error);
       const lines = prepared.uploads.map(
         (u) => `- ${u.name}: upload_id ${u.uploadId}\n  curl -fsS -T '<path to ${u.name}>' '${assetUploadUrl(config.baseUrl, u.uploadId)}'`,

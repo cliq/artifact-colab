@@ -11,7 +11,7 @@
 
 import { randomBytes } from 'node:crypto';
 
-import { and, count, eq, gt, inArray, isNull, lte } from 'drizzle-orm';
+import { and, count, eq, gt, inArray, isNull, lte, notInArray, or } from 'drizzle-orm';
 
 import { sha256hex } from '../auth.js';
 import type { DBOrTx } from '../db/index.js';
@@ -21,8 +21,12 @@ import { isValidAssetName, MAX_ASSET_BYTES, type IncomingAsset } from './assets.
 export const UPLOAD_TTL_MS = 60 * 60 * 1000;
 /** Files one prepare_asset_upload call can stage. */
 export const MAX_UPLOADS_PER_PREPARE = 25;
-/** Unclaimed, unexpired uploads a token may hold at once — bounds what an abandoned session leaves in the database. */
-export const MAX_PENDING_UPLOADS_PER_TOKEN = 50;
+/**
+ * Unclaimed, unexpired uploads one user may hold at once, across all their
+ * tokens — bounds what abandoned sessions leave in the database. Uploads of
+ * deleted tokens stop counting only once swept, which prepare does first.
+ */
+export const MAX_PENDING_UPLOADS_PER_USER = 50;
 
 export function assetUploadUrl(baseUrl: string, uploadId: string): string {
   return `${baseUrl}/api/uploads/${uploadId}`;
@@ -32,7 +36,7 @@ export type PreparedUpload = { uploadId: string; name: string; mime: string; exp
 
 export function prepareUploads(
   db: DBOrTx,
-  tokenId: string,
+  token: { id: string; userId: string },
   files: { name: string; mime: string }[],
   now: Date,
 ): { ok: true; uploads: PreparedUpload[] } | { ok: false; error: string } {
@@ -47,11 +51,17 @@ export function prepareUploads(
   if (names.size !== files.length) return { ok: false, error: 'each file name may appear only once' };
 
   sweepExpiredUploads(db, now);
-  const pending = db.select({ n: count() }).from(assetUploads).where(eq(assetUploads.tokenId, tokenId)).get()?.n ?? 0;
-  if (pending + files.length > MAX_PENDING_UPLOADS_PER_TOKEN) {
+  const pending =
+    db
+      .select({ n: count() })
+      .from(assetUploads)
+      .innerJoin(tokens, eq(tokens.id, assetUploads.tokenId))
+      .where(eq(tokens.userId, token.userId))
+      .get()?.n ?? 0;
+  if (pending + files.length > MAX_PENDING_UPLOADS_PER_USER) {
     return {
       ok: false,
-      error: `this token already has ${pending} unclaimed uploads (max ${MAX_PENDING_UPLOADS_PER_TOKEN}); publish them or wait for them to expire`,
+      error: `you already have ${pending} unclaimed uploads (max ${MAX_PENDING_UPLOADS_PER_USER}); publish them or wait for them to expire`,
     };
   }
 
@@ -59,7 +69,7 @@ export function prepareUploads(
   const uploads = files.map((file) => {
     const uploadId = randomBytes(24).toString('base64url');
     db.insert(assetUploads)
-      .values({ idHash: sha256hex(uploadId), tokenId, name: file.name, mime: file.mime, data: null, createdAt: now, expiresAt })
+      .values({ idHash: sha256hex(uploadId), tokenId: token.id, name: file.name, mime: file.mime, data: null, createdAt: now, expiresAt })
       .run();
     return { uploadId, name: file.name, mime: file.mime, expiresAt };
   });
@@ -80,12 +90,27 @@ export type ReceiveOutcome =
   | { ok: true; name: string; size: number }
   | { ok: false; status: 400 | 404 | 409 | 413; error: string };
 
-/** Store the bytes PUT to an upload URL. Unknown, expired and orphaned (token gone) ids all look the same. */
-export function receiveUpload(db: DBOrTx, uploadId: string, data: Buffer, now: Date): ReceiveOutcome {
+export type UploadTarget = { ok: true; idHash: string; name: string } | { ok: false; status: 404 | 409; error: string };
+
+/**
+ * Whether an upload URL may still receive its file. Checked before the body
+ * is read (see app.ts), so a request without a live capability never gets to
+ * make the server buffer megabytes. Unknown, expired and orphaned (token
+ * gone) ids all look the same.
+ */
+export function checkUploadTarget(db: DBOrTx, uploadId: string, now: Date): UploadTarget {
   const row = db.select().from(assetUploads).where(eq(assetUploads.idHash, sha256hex(uploadId))).get();
   if (!row || row.expiresAt <= now || !tokenIsLive(db, row.tokenId)) {
     return { ok: false, status: 404, error: 'unknown or expired upload URL; call prepare_asset_upload again' };
   }
+  if (row.data !== null) return { ok: false, status: 409, error: 'this upload URL was already used; each URL takes one file' };
+  return { ok: true, idHash: row.idHash, name: row.name };
+}
+
+/** Store the bytes PUT to an upload URL, re-checking the target since the body may have taken a while to arrive. */
+export function receiveUpload(db: DBOrTx, uploadId: string, data: Buffer, now: Date): ReceiveOutcome {
+  const row = checkUploadTarget(db, uploadId, now);
+  if (!row.ok) return row;
   if (data.length === 0) return { ok: false, status: 400, error: 'empty body; PUT the file contents' };
   if (data.length > MAX_ASSET_BYTES) return { ok: false, status: 413, error: 'file exceeds the 4 MB per-asset cap' };
   // Conditional on data still being null, so two racing PUTs cannot both win.
@@ -133,6 +158,10 @@ export function claimUploads(db: DBOrTx, idHashes: string[]): void {
   if (idHashes.length > 0) db.delete(assetUploads).where(inArray(assetUploads.idHash, idHashes)).run();
 }
 
+/** Drop uploads past their expiry, and those whose token was revoked or removed with its team membership. */
 export function sweepExpiredUploads(db: DBOrTx, now: Date): number {
-  return db.delete(assetUploads).where(lte(assetUploads.expiresAt, now)).run().changes;
+  return db
+    .delete(assetUploads)
+    .where(or(lte(assetUploads.expiresAt, now), notInArray(assetUploads.tokenId, db.select({ id: tokens.id }).from(tokens))))
+    .run().changes;
 }
