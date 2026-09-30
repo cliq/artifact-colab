@@ -125,6 +125,13 @@ describe('mcp', () => {
     ]);
   });
 
+  test('publish_artifact tells agents to pick one asset path per publish', async () => {
+    const result = await rpcResult(await rpc('tools/list', {}));
+    const publish = result.tools.find((t: any) => t.name === 'publish_artifact');
+    expect(publish.description).toContain('Pick ONE path per publish');
+    expect(publish.description).toContain('every call creates a new version');
+  });
+
   let documentId: string;
 
   test('publish_artifact creates a document and returns its URL', async () => {

@@ -72,9 +72,12 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         'With document_id, appends a new version to that document; existing comments re-anchor onto the new version where their quoted text still exists. ' +
         'Pass project by name to assign the artifact, creating that Project if the name is unused; pass null for Unfiled. ' +
         'Omitting project leaves a revision in its current Project. Project names are current: after a rename, the old unused name creates a new Project. ' +
-        'Binary files (screenshots, images) go in `assets` instead of being inlined: reference each one from the HTML by its exact name ' +
+        'Binary files (screenshots, images) are uploaded as assets instead of being inlined in the HTML: reference each one by its exact name ' +
         '(e.g. <img src="shots/bar.png">, or ![alt](shots/bar.png) in Markdown) and the server substitutes it when rendering. ' +
-        'For files too large to inline in a tool call, publish from disk instead — POST multipart/form-data to ' +
+        'Pick ONE path per publish: pass files in `assets` (base64) only when they total under about 200 KB; for anything larger, ' +
+        'publish from disk instead, sending the HTML and every asset together in a single request. ' +
+        'Never split one publish across both paths (e.g. images by curl, HTML here): every call creates a new version. ' +
+        'To publish from disk, POST multipart/form-data to ' +
         `${config.baseUrl}/api/publish with the same bearer token: curl -X POST ${config.baseUrl}/api/publish ` +
         '-H "Authorization: Bearer $TOKEN" -F title="..." -F html=@page.html -F "assets=@bar.png;filename=shots/bar.png" ' +
         '(pass -F markdown=@page.md instead of the html part to publish Markdown; document_id, visibility, and project are optional form fields; ' +
