@@ -618,13 +618,28 @@ describe('mcp assets', () => {
     expect(bad.isError).toBe(true);
     expect(bad.content[0].text).toContain('invalid asset name');
 
-    const big = Buffer.alloc(4 * 1024 * 1024 + 1).toString('base64');
+    const before = db.select().from(versions).all().length;
+    const big = Buffer.alloc(1024 * 1024 + 1).toString('base64');
     const oversized = await callTool('publish_artifact', {
       title: 'X',
       html: '<p>x</p>',
-      assets: [{ name: 'big.png', mime_type: 'image/png', data_base64: big }],
+      assets: [{ name: 'shots/big.png', mime_type: 'image/png', data_base64: big }],
     });
     expect(oversized.isError).toBe(true);
-    expect(oversized.content[0].text).toContain('4 MB');
+    const message = oversized.content[0].text as string;
+    expect(message).toContain('over the 1 MB cap');
+    expect(message).toContain('Nothing was published');
+    expect(message).toContain('curl -X POST http://colab.example.com/api/publish');
+    expect(message).toContain('filename=shots/big.png');
+    expect(db.select().from(versions).all()).toHaveLength(before);
+  });
+
+  test('inline assets just under the cap still publish', async () => {
+    const result = await callTool('publish_artifact', {
+      title: 'Near cap',
+      html: '<img src="a.png">',
+      assets: [{ name: 'a.png', mime_type: 'image/png', data_base64: Buffer.alloc(1024 * 1024).toString('base64') }],
+    });
+    expect(result.isError).toBeFalsy();
   });
 });

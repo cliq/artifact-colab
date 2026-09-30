@@ -41,6 +41,13 @@ import { getProjectForUser, moveArtifact, ProjectError, visibleProjectsForTeam }
 
 import { and, eq } from 'drizzle-orm';
 
+/**
+ * Decoded-size cap on base64 `assets` in one publish_artifact call. Far below
+ * the 20 MB publish cap: agents can't reliably emit megabytes of base64 in a
+ * tool call, so larger sets are sent from disk and the error says how.
+ */
+export const MAX_INLINE_ASSETS_BYTES = 1024 * 1024;
+
 function toolError(message: string): CallToolResult {
   return { content: [{ type: 'text', text: message }], isError: true };
 }
@@ -104,7 +111,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
             z.object({
               name: z.string().describe('Reference name used in src attributes, e.g. "shots/bar.png"'),
               mime_type: z.string().describe('e.g. "image/png"'),
-              data_base64: z.string().describe('Base64-encoded file contents (4 MB max each, 20 MB total)'),
+              data_base64: z.string().describe('Base64-encoded file contents (1 MB total across all inline assets)'),
             }),
           )
           .optional()
@@ -118,6 +125,17 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         const data = Buffer.from(a.data_base64, 'base64');
         if (data.length === 0) return toolError(`asset ${a.name} is empty or not valid base64`);
         decodedAssets.push({ name: a.name, mime: a.mime_type, data });
+      }
+      const inlineBytes = decodedAssets.reduce((sum, a) => sum + a.data.length, 0);
+      if (inlineBytes > MAX_INLINE_ASSETS_BYTES) {
+        const parts = decodedAssets.map((a) => `-F "assets=@<path to ${a.name}>;filename=${a.name}"`).join(' ');
+        return toolError(
+          `inline assets total ${(inlineBytes / (1024 * 1024)).toFixed(1)} MB, over the 1 MB cap for base64 in a tool call. ` +
+            'Nothing was published. Send the HTML and all assets together from disk in one request instead: ' +
+            `curl -X POST ${config.baseUrl}/api/publish -H "Authorization: Bearer $TOKEN" -F title="..." -F html=@page.html ${parts}` +
+            (document_id ? ` -F document_id=${document_id}` : '') +
+            ' ($TOKEN is the token this MCP server is configured with).',
+        );
       }
 
       const outcome = publishArtifact(db, config, user, teamId, {
