@@ -14,6 +14,10 @@
  * published — HTML, or Markdown for markdown-published versions (no
  * annotator, no inlined assets) — the download target the get_artifact MCP
  * tool points at when the artifact is too large to inline.
+ *
+ * PUT /api/uploads/:id: the raw bytes of one file staged by the
+ * prepare_asset_upload MCP tool. Not bearer-authed: the unguessable id in the
+ * URL is the credential, and it takes exactly one upload.
  */
 
 import { Buffer } from 'node:buffer';
@@ -24,11 +28,19 @@ import { getTokenAuth, touchToken } from '../auth.js';
 import type { AppEnv } from '../context.js';
 import { bearerAuth, sessionAuth } from '../middleware.js';
 import type { IncomingAsset } from '../services/assets.js';
+import { receiveUpload } from '../services/assetUploads.js';
 import { isDocumentVisibility } from '../services/documents.js';
 import { publishArtifact, publishDocumentVersion, type PublishInput } from '../services/publish.js';
 import { findDocumentInTeam, findVersion } from './api.js';
 
 export const publishRoutes = new Hono<AppEnv>();
+
+publishRoutes.put('/api/uploads/:id', async (c) => {
+  const data = Buffer.from(await c.req.arrayBuffer());
+  const outcome = receiveUpload(c.get('db'), c.req.param('id'), data, new Date());
+  if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
+  return c.json({ name: outcome.name, size: outcome.size });
+});
 
 publishRoutes.use('/api/publish', bearerAuth());
 publishRoutes.use('/api/docs/:slug/raw', bearerAuth());

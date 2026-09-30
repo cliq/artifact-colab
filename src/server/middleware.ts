@@ -14,7 +14,7 @@ import type { AppEnv } from './context.js';
 
 // /api/publish is Bearer-authed (no cookies), so CSRF doesn't apply — and the
 // check would otherwise consume the multipart body before the handler runs.
-const CSRF_EXEMPT_PREFIXES = ['/mcp', '/api/publish'];
+const CSRF_EXEMPT_PREFIXES = ['/mcp', '/api/publish', '/api/uploads/'];
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 function isSecure(baseUrl: string): boolean {

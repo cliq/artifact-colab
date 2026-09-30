@@ -133,9 +133,13 @@ Use the same configured `DEV_LOGIN_CODE` for these demo emails, or read their si
 - Artifacts run inside a sandboxed iframe; their scripts can't touch the app or your session. The sandbox has no
   Web Storage of its own, so the viewer stands in: an artifact's `localStorage`/`sessionStorage` is kept per
   document in your browser and comes back on the next visit, like it would on claude.ai.
-- Large artifacts don't have to squeeze through an MCP tool call: `POST /api/publish` accepts a multipart upload
-  (HTML file + image assets) with the same bearer token, so Claude can `curl` big files straight from disk. The
-  `publish_artifact` tool description includes the exact command.
+- Screenshots and other assets don't have to squeeze through an MCP tool call as base64 (capped at 1 MB inline):
+  the `prepare_asset_upload` tool hands out one-time upload URLs, the agent `curl`s each file there without needing
+  its token, and `publish_artifact` picks the files up by id in the same version as the HTML. URLs expire after an
+  hour and take one file each.
+- HTML or Markdown too large for a tool call can be published from disk: `POST /api/publish` accepts a multipart
+  upload (source file + assets) with the same bearer token. The `publish_artifact` tool description includes the
+  exact command.
 - Instance admins can take a backup from **Admin → Backups**: the server packs a live snapshot of all data into a
   `.tar.gz` (the SQLite database plus a manifest), shows progress while packing, and keeps a list of previous packages
   to download again or delete. Downloads support HTTP ranges, so an interrupted one resumes where it stopped. Packages

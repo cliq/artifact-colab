@@ -23,6 +23,7 @@ import { pageRoutes } from './routes/pages.js';
 import { publishRoutes } from './routes/publish.js';
 import { projectRoutes } from './routes/projects.js';
 import { tokensRoutes } from './routes/tokens.js';
+import { MAX_ASSET_BYTES } from './services/assets.js';
 import { BackupManager } from './services/backups.js';
 
 // Publishing legitimately carries multi-megabyte bodies (5 MB html + 20 MB of
@@ -36,6 +37,8 @@ const PUBLISH_BODY_PATHS = new Set(['/api/publish', '/mcp']);
 // New comments and replies may carry up to four 5 MB images as multipart.
 const COMMENT_MAX_BODY_BYTES = 24 * 1024 * 1024;
 const COMMENT_UPLOAD_PATH = /^\/api\/(docs\/[^/]+\/comments|comments\/[^/]+\/replies)$/;
+// A staged asset upload is one raw file, capped like any single asset.
+const ASSET_UPLOAD_PATH = /^\/api\/uploads\/[^/]+$/;
 
 export function createApp(deps: { db: DB; config: Config; backups?: BackupManager }): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -51,9 +54,14 @@ export function createApp(deps: { db: DB; config: Config; backups?: BackupManage
   const publishBodyLimit = bodyLimit({ maxSize: PUBLISH_MAX_BODY_BYTES });
   const commentBodyLimit = bodyLimit({ maxSize: COMMENT_MAX_BODY_BYTES });
   const defaultBodyLimit = bodyLimit({ maxSize: DEFAULT_MAX_BODY_BYTES });
+  const assetUploadBodyLimit = bodyLimit({
+    maxSize: MAX_ASSET_BYTES,
+    onError: (c) => c.json({ error: 'file exceeds the 4 MB per-asset cap' }, 413),
+  });
   app.use('*', (c, next) => {
     const path = new URL(c.req.url).pathname;
     if (PUBLISH_BODY_PATHS.has(path) || /^\/api\/docs\/[^/]+\/versions$/.test(path)) return publishBodyLimit(c, next);
+    if (ASSET_UPLOAD_PATH.test(path)) return assetUploadBodyLimit(c, next);
     return (COMMENT_UPLOAD_PATH.test(path) ? commentBodyLimit : defaultBodyLimit)(c, next);
   });
 

@@ -1,7 +1,7 @@
 /**
  * MCP endpoint (Streamable HTTP, stateless) exposing publish_artifact,
- * get_artifact, Project discovery and moves, comments (with their images),
- * and deletion. Auth is
+ * get_artifact, staged asset uploads, Project discovery and moves, comments
+ * (with their images), and deletion. Auth is
  * a personal access token via `Authorization:
  * Bearer` — the bearerAuth middleware resolves the user and token, and both
  * ride into the per-request McpServer instance through `authInfo.extra`
@@ -30,8 +30,9 @@ import {
   topLevelCommentsFor,
 } from './routes/api.js';
 import { resolveDocumentAccess } from './services/access.js';
-import { assetsForDocument } from './services/assets.js';
+import { assetsForDocument, MAX_ASSET_BYTES, MAX_ASSETS_TOTAL_BYTES } from './services/assets.js';
 import type { IncomingAsset } from './services/assets.js';
+import { assetUploadUrl, MAX_UPLOADS_PER_PREPARE, prepareUploads, UPLOAD_TTL_MS } from './services/assetUploads.js';
 import { indexVersionHtml } from './services/anchorStates.js';
 import { MAX_COMMENT_IMAGE_BYTES, MAX_COMMENT_IMAGES, validateCommentImages } from './services/commentImages.js';
 import { createReply, createThreadComment, deleteComment, editComment, locateQuote, type CommentVia } from './services/comments.js';
@@ -44,7 +45,7 @@ import { and, eq } from 'drizzle-orm';
 /**
  * Decoded-size cap on base64 `assets` in one publish_artifact call. Far below
  * the 20 MB publish cap: agents can't reliably emit megabytes of base64 in a
- * tool call, so larger sets are sent from disk and the error says how.
+ * tool call, so larger sets go through prepare_asset_upload instead.
  */
 export const MAX_INLINE_ASSETS_BYTES = 1024 * 1024;
 
@@ -81,10 +82,11 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         'Omitting project leaves a revision in its current Project. Project names are current: after a rename, the old unused name creates a new Project. ' +
         'Binary files (screenshots, images) are uploaded as assets instead of being inlined in the HTML: reference each one by its exact name ' +
         '(e.g. <img src="shots/bar.png">, or ![alt](shots/bar.png) in Markdown) and the server substitutes it when rendering. ' +
-        'Pick ONE path per publish: pass files in `assets` (base64) only when they total under about 200 KB; for anything larger, ' +
-        'publish from disk instead, sending the HTML and every asset together in a single request. ' +
-        'Never split one publish across both paths (e.g. images by curl, HTML here): every call creates a new version. ' +
-        'To publish from disk, POST multipart/form-data to ' +
+        'Pass files in `assets` (base64) only when they total under about 200 KB. For anything larger, call prepare_asset_upload first, ' +
+        'PUT each file to the URL it returns (plain curl, no token needed), then pass the returned ids here in `upload_ids` along with the HTML. ' +
+        '`assets` and `upload_ids` can be combined; both land in this one version. ' +
+        'Never publish images and HTML in separate calls (e.g. images through /api/publish, then the HTML here): every publish creates a new version. ' +
+        'When the HTML or Markdown itself is too large for a tool call, publish from disk instead — POST multipart/form-data to ' +
         `${config.baseUrl}/api/publish with the same bearer token: curl -X POST ${config.baseUrl}/api/publish ` +
         '-H "Authorization: Bearer $TOKEN" -F title="..." -F html=@page.html -F "assets=@bar.png;filename=shots/bar.png" ' +
         '(pass -F markdown=@page.md instead of the html part to publish Markdown; document_id, visibility, and project are optional form fields; ' +
@@ -116,9 +118,14 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
           )
           .optional()
           .describe('Files referenced by the HTML; re-uploading a name replaces it for the whole document'),
+        upload_ids: z
+          .array(z.string())
+          .max(MAX_UPLOADS_PER_PREPARE * 2)
+          .optional()
+          .describe('Ids from prepare_asset_upload whose files were PUT; each becomes an asset under the name it was prepared with'),
       }),
     },
-    async ({ title, html, markdown, document_id, visibility, project, assets: incomingAssets }) => {
+    async ({ title, html, markdown, document_id, visibility, project, assets: incomingAssets, upload_ids }) => {
       if (!used()) return toolError('token is no longer authorized');
       const decodedAssets: IncomingAsset[] = [];
       for (const a of incomingAssets ?? []) {
@@ -128,13 +135,11 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       }
       const inlineBytes = decodedAssets.reduce((sum, a) => sum + a.data.length, 0);
       if (inlineBytes > MAX_INLINE_ASSETS_BYTES) {
-        const parts = decodedAssets.map((a) => `-F "assets=@<path to ${a.name}>;filename=${a.name}"`).join(' ');
+        const files = JSON.stringify(decodedAssets.map((a) => ({ name: a.name, mime_type: a.mime })));
         return toolError(
           `inline assets total ${(inlineBytes / (1024 * 1024)).toFixed(1)} MB, over the 1 MB cap for base64 in a tool call. ` +
-            'Nothing was published. Send the HTML and all assets together from disk in one request instead: ' +
-            `curl -X POST ${config.baseUrl}/api/publish -H "Authorization: Bearer $TOKEN" -F title="..." -F html=@page.html ${parts}` +
-            (document_id ? ` -F document_id=${document_id}` : '') +
-            ' ($TOKEN is the token this MCP server is configured with).',
+            `Nothing was published. Call prepare_asset_upload with files ${files}, PUT each file to its upload URL, ` +
+            'then call publish_artifact again with the same HTML, `upload_ids` set to the returned ids, and no `assets`.',
         );
       }
 
@@ -146,6 +151,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         visibility,
         project,
         assets: decodedAssets,
+        uploads: upload_ids && upload_ids.length > 0 ? { tokenId: token.id, ids: upload_ids } : undefined,
       });
       if (!outcome.ok) return toolError(outcome.error);
 
@@ -175,6 +181,53 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
   // curl command against /api/docs/:slug/raw instead — the server decides,
   // so the client never has to guess whether an artifact is "too big".
   const INLINE_HTML_LIMIT = 50 * 1024;
+
+  server.registerTool(
+    'prepare_asset_upload',
+    {
+      title: 'Prepare asset upload',
+      description:
+        'Get one-time upload URLs for asset files (screenshots, images) too large to pass as base64 in publish_artifact ' +
+        '(anything over about 200 KB in total). For each file, PUT its raw bytes to the returned URL — ' +
+        'e.g. curl -fsS -T shots/bar.png "<upload_url>" — no Authorization header needed: the URL itself is the credential. ' +
+        'Then call publish_artifact with the HTML and `upload_ids` set to the returned ids; each file becomes an asset under the name given here, ' +
+        'which is what the HTML references (<img src="shots/bar.png">). ' +
+        `Each URL takes one file (${MAX_ASSET_BYTES / (1024 * 1024)} MB max; ${MAX_ASSETS_TOTAL_BYTES / (1024 * 1024)} MB total per publish) ` +
+        `and expires after ${UPLOAD_TTL_MS / (60 * 1000)} minutes; ids can only be published through this same token.`,
+      inputSchema: z.object({
+        files: z
+          .array(
+            z.object({
+              name: z.string().describe('Reference name the HTML will use, e.g. "shots/bar.png"'),
+              mime_type: z.string().describe('e.g. "image/png"; the PUT request\'s Content-Type is ignored'),
+            }),
+          )
+          .min(1)
+          .max(MAX_UPLOADS_PER_PREPARE)
+          .describe(`Up to ${MAX_UPLOADS_PER_PREPARE} files to stage for one publish`),
+      }),
+    },
+    async ({ files }) => {
+      if (!used()) return toolError('token is no longer authorized');
+      const prepared = prepareUploads(db, token.id, files.map((f) => ({ name: f.name, mime: f.mime_type })), new Date());
+      if (!prepared.ok) return toolError(prepared.error);
+      const lines = prepared.uploads.map(
+        (u) => `- ${u.name}: upload_id ${u.uploadId}\n  curl -fsS -T '<path to ${u.name}>' '${assetUploadUrl(config.baseUrl, u.uploadId)}'`,
+      );
+      return {
+        content: [
+          {
+            type: 'text',
+            text:
+              `Staged ${prepared.uploads.length} upload${prepared.uploads.length === 1 ? '' : 's'}, expiring ${prepared.uploads[0]!.expiresAt.toISOString()}. ` +
+              'PUT each file to its URL:\n' +
+              lines.join('\n') +
+              `\nThen call publish_artifact with upload_ids: ${JSON.stringify(prepared.uploads.map((u) => u.uploadId))}.`,
+          },
+        ],
+      };
+    },
+  );
 
   server.registerTool(
     'list_projects',

@@ -107,7 +107,7 @@ describe('mcp', () => {
     expect(lastUsed()).not.toBeNull();
   });
 
-  test('lists the eleven tools', async () => {
+  test('lists the twelve tools', async () => {
     const result = await rpcResult(await rpc('tools/list', {}));
     const names = result.tools.map((t: any) => t.name).sort();
     expect(names).toEqual([
@@ -120,16 +120,18 @@ describe('mcp', () => {
       'get_comments',
       'list_projects',
       'move_artifact',
+      'prepare_asset_upload',
       'publish_artifact',
       'resolve_comment',
     ]);
   });
 
-  test('publish_artifact tells agents to pick one asset path per publish', async () => {
+  test('publish_artifact steers large assets to prepare_asset_upload in the same publish', async () => {
     const result = await rpcResult(await rpc('tools/list', {}));
     const publish = result.tools.find((t: any) => t.name === 'publish_artifact');
-    expect(publish.description).toContain('Pick ONE path per publish');
-    expect(publish.description).toContain('every call creates a new version');
+    expect(publish.description).toContain('under about 200 KB');
+    expect(publish.description).toContain('call prepare_asset_upload first');
+    expect(publish.description).toContain('every publish creates a new version');
   });
 
   let documentId: string;
@@ -629,8 +631,7 @@ describe('mcp assets', () => {
     const message = oversized.content[0].text as string;
     expect(message).toContain('over the 1 MB cap');
     expect(message).toContain('Nothing was published');
-    expect(message).toContain('curl -X POST http://colab.example.com/api/publish');
-    expect(message).toContain('filename=shots/big.png');
+    expect(message).toContain('Call prepare_asset_upload with files [{"name":"shots/big.png","mime_type":"image/png"}]');
     expect(db.select().from(versions).all()).toHaveLength(before);
   });
 

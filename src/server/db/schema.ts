@@ -272,6 +272,31 @@ export const assets = sqliteTable(
 export type Asset = typeof assets.$inferSelect;
 export type NewAsset = typeof assets.$inferInsert;
 
+/**
+ * Asset files staged through prepare_asset_upload: the agent PUTs each file
+ * to a one-time URL, then publish_artifact claims them by upload id. Keyed by
+ * the hash of that id, which is the URL's only credential. `token_id` is not
+ * a foreign key — tokens are hard-deleted, and a staged file must never
+ * block that; liveness is re-checked on upload and publish instead. Rows are
+ * removed when claimed or once past `expires_at`.
+ */
+export const assetUploads = sqliteTable(
+  'asset_uploads',
+  {
+    idHash: text('id_hash').primaryKey(),
+    tokenId: text('token_id').notNull(),
+    name: text('name').notNull(),
+    mime: text('mime').notNull(),
+    /** Null until the file is PUT. */
+    data: blob('data', { mode: 'buffer' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [index('asset_uploads_token_id_idx').on(table.tokenId), index('asset_uploads_expires_at_idx').on(table.expiresAt)],
+);
+
+export type AssetUpload = typeof assetUploads.$inferSelect;
+
 export const versions = sqliteTable(
   'versions',
   {

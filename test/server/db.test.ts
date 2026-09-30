@@ -32,6 +32,7 @@ describe('db', () => {
     const names = rows.map((r) => r.name).sort();
     expect(names).toEqual(
       [
+        'asset_uploads',
         'assets',
         'comment_anchor_states',
         'comment_images',

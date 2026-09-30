@@ -2,8 +2,8 @@
  * Shared publish flow behind both the MCP publish_artifact tool and the REST
  * POST /api/publish endpoint: validates sizes and asset names, renders
  * Markdown submissions to HTML (keeping the source on the version), creates
- * the document (or appends a version to an existing one), upserts assets, and
- * recomputes comment anchors.
+ * the document (or appends a version to an existing one), upserts assets
+ * (claiming any staged uploads), and recomputes comment anchors.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -26,6 +26,7 @@ import {
   upsertAssets,
   type IncomingAsset,
 } from './assets.js';
+import { claimUploads, readUploads } from './assetUploads.js';
 
 export const MAX_HTML_BYTES = 5 * 1024 * 1024;
 
@@ -51,6 +52,8 @@ export interface PublishInput {
   markdown?: string;
   documentId?: string;
   assets?: IncomingAsset[];
+  /** Files staged through prepare_asset_upload by `tokenId`, added to `assets` and consumed once the version is written. */
+  uploads?: { tokenId: string; ids: string[] };
   /** Sets it on create (default 'team'); on republish, updates it when given, keeps the current value when omitted. */
   visibility?: DocumentVisibility;
   /** Omitted preserves assignment; null clears it; a name resolves or creates a Project. */
@@ -81,7 +84,7 @@ export function publishDocumentVersion(
   config: Config,
   user: User,
   documentId: string,
-  input: Omit<PublishInput, 'documentId' | 'visibility' | 'project'>,
+  input: Omit<PublishInput, 'documentId' | 'visibility' | 'project' | 'uploads'>,
 ): DocumentVersionPublishOutcome {
   const outcome = db.transaction((tx) =>
     publishWithin(tx, config, user, { kind: 'document' }, { ...input, documentId, visibility: undefined, project: undefined }),
@@ -110,7 +113,19 @@ function publishWithin(db: DBOrTx, config: Config, user: User, scope: { kind: 't
   }
   const html = input.html ?? renderMarkdownArtifact(markdown!, title);
 
-  const incoming = input.assets ?? [];
+  let incoming = input.assets ?? [];
+  let claimed: string[] = [];
+  if (input.uploads && input.uploads.ids.length > 0) {
+    const staged = readUploads(db, input.uploads.tokenId, input.uploads.ids, new Date());
+    if (!staged.ok) return { ok: false, status: 400, error: staged.error };
+    const seen = new Set(incoming.map((a) => a.name));
+    for (const asset of staged.assets) {
+      if (seen.has(asset.name)) return { ok: false, status: 400, error: `asset ${asset.name} is given more than once` };
+      seen.add(asset.name);
+    }
+    incoming = [...incoming, ...staged.assets];
+    claimed = staged.idHashes;
+  }
   let total = 0;
   for (const asset of incoming) {
     if (!isValidAssetName(asset.name)) {
@@ -200,6 +215,8 @@ function publishWithin(db: DBOrTx, config: Config, user: User, scope: { kind: 't
     .run();
   db.update(documents).set({ currentVersionId: versionId }).where(eq(documents.id, docId)).run();
   if (incoming.length > 0) upsertAssets(db, docId, incoming, now);
+  // Only on success: an error returned above still commits the transaction.
+  claimUploads(db, claimed);
   autoWatch(db, docId, user.id, now);
   const { orphaned } = recomputeForVersion(db, docId, versionId);
 
