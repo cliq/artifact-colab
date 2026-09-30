@@ -14,9 +14,10 @@ import { createApp } from '../../src/server/app.js';
 import { createToken, getOrCreateUser, revokeToken } from '../../src/server/auth.js';
 import type { Config } from '../../src/server/config.js';
 import type { AppEnv } from '../../src/server/context.js';
-import { assets, assetUploads, openDb, versions, type DB } from '../../src/server/db/index.js';
+import { assets, assetUploads, documents, openDb, versions, type DB } from '../../src/server/db/index.js';
 import { MAX_ASSET_BYTES } from '../../src/server/services/assets.js';
 import { MAX_PENDING_UPLOADS_PER_USER, sweepExpiredUploads, UPLOAD_TTL_MS } from '../../src/server/services/assetUploads.js';
+import { publishArtifact } from '../../src/server/services/publish.js';
 import { baseTestConfig, seedTeamWithDomain } from './teamTestUtils.js';
 
 // 1x1 transparent PNG
@@ -27,6 +28,8 @@ const PNG_BYTES = Buffer.from(
 
 describe('asset uploads', () => {
   let db: DB;
+  let sqlite: ReturnType<typeof openDb>['sqlite'];
+  let config: Config;
   let app: Hono<AppEnv>;
   let pat: string;
   let otherPat: string;
@@ -34,8 +37,8 @@ describe('asset uploads', () => {
   let rpcId = 0;
 
   beforeAll(() => {
-    db = openDb(':memory:').db;
-    const config: Config = baseTestConfig({ baseUrl: 'http://colab.example.com' });
+    ({ db, sqlite } = openDb(':memory:'));
+    config = baseTestConfig({ baseUrl: 'http://colab.example.com' });
     seedTeamWithDomain(db, 'team-example', 'example.com');
     app = createApp({ db, config });
     const user = getOrCreateUser(db, 'dana@example.com', new Date());
@@ -168,6 +171,29 @@ describe('asset uploads', () => {
 
     const retried = await callTool('publish_artifact', { title: 'Yes', html: '<img src="keep.png">', upload_ids: [shot!.id] });
     expect(retried.isError, retried.content[0].text).toBeFalsy();
+  });
+
+  test('a publish that throws after claiming its uploads rolls the claim back', async () => {
+    const [shot] = await prepare([{ name: 'rollback.png', mime_type: 'image/png' }]);
+    await put(shot!.url, PNG_BYTES);
+    const tokenId = db.select().from(assetUploads).all().find((u) => u.name === 'rollback.png')!.tokenId;
+    const user = getOrCreateUser(db, 'dana@example.com', new Date());
+    const documentsBefore = db.select().from(documents).all().length;
+    // autoWatch runs after claimUploads, so failing it lands after the claim.
+    sqlite.exec(`CREATE TRIGGER fail_upload_publish BEFORE INSERT ON watches BEGIN SELECT RAISE(ABORT, 'forced failure'); END`);
+    try {
+      expect(() =>
+        publishArtifact(db, config, user, 'team-example', {
+          title: 'Will fail',
+          html: '<img src="rollback.png">',
+          uploads: { tokenId, ids: [shot!.id] },
+        }),
+      ).toThrow('forced failure');
+    } finally {
+      sqlite.exec('DROP TRIGGER fail_upload_publish');
+    }
+    expect(db.select().from(documents).all()).toHaveLength(documentsBefore);
+    expect(db.select().from(assetUploads).all().some((u) => u.name === 'rollback.png' && u.data !== null)).toBe(true);
   });
 
   test('publishing before the file is PUT says so', async () => {
