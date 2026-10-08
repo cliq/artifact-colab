@@ -82,13 +82,13 @@ Observed selection path: `onSelection()` in the annotator reads `window.getSelec
 
 **Controller boundary:** Export `initMobileViewer(onLayoutChange: () => void)` returning a controller with `isMobile(): boolean`, `openPanel(): void`, `closePanel(): void`, and `setSelectionAvailable(available: boolean): void`. The selection action calls back into the existing viewer composer; it must not own anchors or save comments. Choose the smallest callback registration needed after reading initialization order. Initialize shared controls before the comparison early return.
 
-- [ ] Inspect the remaining viewer/compare code and test setup; install missing development dependencies and browser binaries. Run baseline `npm run check` and record any pre-existing failures.
-- [ ] Add browser tests using a real signed-in session and published fixture, following `e2e/frame-scale.spec.ts` setup. At 390×844 assert header/toolbar/rail are hidden, compact controls are visible, artifact width matches the viewport, and its top is within 60 CSS pixels of the page top. Assert Full layout and Reading view toggle without a frame navigation or loss of a marker stored inside the artifact.
-- [ ] Add panel tests: open/close on mobile, view a real thread, preserve a draft, and switch to desktop and back with desktop collapse preference set. Verify normal-flow card visibility and absence of app horizontal overflow. Exercise mobile Changes in comparison mode and an older version's visible version cue.
-- [ ] Run the focused Chromium tests and confirm failure is due to missing mobile behavior.
-- [ ] Implement markup, viewer-scoped responsive CSS, and the mobile controller. Keep modal focus, close behavior, and background interaction consistent. Wire geometry changes to the appropriate scaler/alignment functions; suppress desktop card positioning in the mobile sheet.
-- [ ] Run the focused tests and inspect mobile screenshots at 390×844 and a short landscape viewport. Check scaled and responsive artifacts. Fix failures before committing.
-- [ ] Commit the working layout stage as `feat: add mobile artifact reading view and comments sheet`.
+- [x] Inspect the remaining viewer/compare code and test setup; install missing development dependencies and browser binaries. Run baseline `npm run check` and record any pre-existing failures.
+- [x] Add browser tests using a real signed-in session and published fixture, following `e2e/frame-scale.spec.ts` setup. At 390×844 assert header/toolbar/rail are hidden, compact controls are visible, artifact width matches the viewport, and its top is within 60 CSS pixels of the page top. Assert Full layout and Reading view toggle without a frame navigation or loss of a marker stored inside the artifact.
+- [x] Add panel tests: open/close on mobile, view a real thread, preserve a draft, and switch to desktop and back with desktop collapse preference set. Verify normal-flow card visibility and absence of app horizontal overflow. Exercise mobile Changes in comparison mode and an older version's visible version cue.
+- [x] Run the focused Chromium tests and confirm failure is due to missing mobile behavior.
+- [x] Implement markup, viewer-scoped responsive CSS, and the mobile controller. Keep modal focus, close behavior, and background interaction consistent. Wire geometry changes to the appropriate scaler/alignment functions; suppress desktop card positioning in the mobile sheet.
+- [x] Run the focused tests and inspect mobile screenshots at 390×844 and a short landscape viewport. Check scaled and responsive artifacts. Fix failures before committing.
+- [x] Commit the working layout stage as `feat: add mobile artifact reading view and comments sheet`.
 
 ## Task 2: Touch selection and explicit comment composition
 
@@ -96,24 +96,30 @@ Observed selection path: `onSelection()` in the annotator reads `window.getSelec
 
 **State boundary:** Keep the transient selected anchor/quote separate from the committed composer anchor/quote. Reuse `TextAnchor` and current bridge messages. A selected quote becomes the draft anchor only on explicit mobile comment activation; preserve desktop composition behavior.
 
-- [ ] Add a regression that creates a native DOM Range in the real frame without dispatching `mouseup`. Wait for the Comment on selection action; assert the sheet stays closed while changing the selection. Existing `selectPhraseInFrame` dispatches a synthetic mouseup, so do not use it unmodified for this regression.
-- [ ] Test tapping the action, clearing the frame's native selection, and typing/saving. Assert the composer still displays the final selected quote and the saved thread has that quote; reload and confirm persistence/highlight anchoring. Also test cancel, draft close/reopen, and adjusting the selection before committing it.
-- [ ] Test that comparison/older/read-only views do not offer composition. Retain coverage of desktop selection and comment saving.
-- [ ] Run the tests before implementation and confirm the selection-only regression fails for the expected reason.
-- [ ] Add coalesced `selectionchange` capture in the annotator, preserving selection-length limits and bridge validation. Avoid emitting redundant work for every intermediate handle movement.
-- [ ] Implement explicit mobile composition and its anchor lifetime. Snapshot before focus changes; ensure click/touch ordering cannot clear the selected anchor before the action runs. Empty selection messages may clear the transient action but must not clear a committed draft. Tapping an existing highlight should open its thread sheet.
-- [ ] Add a WebKit mobile project scoped to `mobile-viewer.spec.ts` using a Playwright iPhone device. Use project context options in setup rather than accidentally constructing a default desktop context. Run the suite in Chromium and mobile WebKit.
-- [ ] Commit as `fix: support touch selection and mobile anchored comments`.
+- [x] Add a regression that creates a native DOM Range in the real frame without dispatching `mouseup`. Wait for the Comment on selection action; assert the sheet stays closed while changing the selection. Existing `selectPhraseInFrame` dispatches a synthetic mouseup, so do not use it unmodified for this regression.
+- [x] Test tapping the action, clearing the frame's native selection, and typing/saving. Assert the composer still displays the final selected quote and the saved thread has that quote; reload and confirm persistence/highlight anchoring. Also test cancel, draft close/reopen, and adjusting the selection before committing it.
+- [x] Test that comparison/older/read-only views do not offer composition. Retain coverage of desktop selection and comment saving.
+- [x] Run the tests before implementation and confirm the selection-only regression fails for the expected reason.
+- [x] Add coalesced `selectionchange` capture in the annotator, preserving selection-length limits and bridge validation. Avoid emitting redundant work for every intermediate handle movement.
+- [x] Implement explicit mobile composition and its anchor lifetime. Snapshot before focus changes; ensure click/touch ordering cannot clear the selected anchor before the action runs. Empty selection messages may clear the transient action but must not clear a committed draft. Tapping an existing highlight should open its thread sheet.
+- [x] Add a WebKit mobile project scoped to `mobile-viewer.spec.ts` using a Playwright iPhone device. Use project context options in setup rather than accidentally constructing a default desktop context. Run the suite in Chromium and mobile WebKit.
+- [x] Commit as `fix: support touch selection and mobile anchored comments`.
 
 ## Task 3: Final verification and handoff
 
-- [ ] Run `npm run check` (TypeScript and complete Vitest suite).
-- [ ] Run `npm run build`.
-- [ ] Run `npm run e2e` for existing Chromium regressions plus the scoped mobile WebKit project. The runner starts a scratch server at port 3789 and uses `test-results/e2e-tmp`; do not point it at production or real development data.
-- [ ] Inspect screenshots and manually review dialog focus, reachable controls, permissions, breakpoint transitions, selection races, and iframe preservation. Run `git diff --check` and review the complete branch diff.
-- [ ] Commit any necessary reviewed fixes; update this plan's checkboxes and note test outcomes.
-- [ ] Report branch, commits, and verification results. Distinguish automated WebKit selection/event coverage from physical iOS native selection-handle and keyboard testing: emulation does not prove all real-device UI behavior. If a real iPhone is unavailable, explicitly list that remaining validation rather than claiming it was tested.
+- [x] Run `npm run check` (TypeScript and complete Vitest suite).
+- [x] Run `npm run build`.
+- [x] Run `npm run e2e` for existing Chromium regressions plus the scoped mobile WebKit project. The runner starts a scratch server at port 3789 and uses `test-results/e2e-tmp`; do not point it at production or real development data.
+- [x] Inspect screenshots and manually review dialog focus, reachable controls, permissions, breakpoint transitions, selection races, and iframe preservation. Run `git diff --check` and review the complete branch diff.
+- [x] Commit any necessary reviewed fixes; update this plan's checkboxes and note test outcomes.
+- [x] Report branch, commits, and verification results. Distinguish automated WebKit selection/event coverage from physical iOS native selection-handle and keyboard testing: emulation does not prove all real-device UI behavior. If a real iPhone is unavailable, explicitly list that remaining validation rather than claiming it was tested.
 
 ## Resume instruction
 
 Read this plan, check the branch/status, and begin Task 1. Design and implementation are already authorized. The previous session stopped only because the user requested saving the plan for a restart.
+
+## Outcome (2026-10-08)
+
+- `npm run check` 496 unit tests pass; `npm run build` ok; `npm run e2e` Chromium: 57 pass (10 new in `e2e/mobile-viewer.spec.ts`).
+- The `mobile-webkit` Playwright project is configured but could **not run** on the dev machine (WebKit host dependencies missing; installing needs sudo). Not yet exercised anywhere.
+- Not tested on a physical iOS device: native selection handles, on-screen keyboard behavior (VisualViewport handling in `mobileViewer.ts` is untested), and short landscape viewports.
