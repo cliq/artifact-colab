@@ -12,7 +12,7 @@ import { installStorageShim, type StorageShim } from './storage.js';
 
 import { describeAnchor } from '../anchoring/anchor.js';
 import { buildTextIndex, domToTextOffset, textRangeToDomRange, type TextIndex } from '../anchoring/index.js';
-import { locateTextAnchor } from '../anchoring/text.js';
+import { locateTextAnchor, type TextAnchor } from '../anchoring/text.js';
 import type { AnchorPosition, AnnotatorAnchorInput, DiffRangeInput, FrameMessage, ParentMessage } from './protocol.js';
 
 installExternalLinks(document);
@@ -28,6 +28,7 @@ try {
 
 const MAX_SELECTION_CHARS = 10_000;
 const RELOCATE_DEBOUNCE_MS = 200;
+const SELECTION_DEBOUNCE_MS = 150;
 
 interface LocatedComment {
   input: AnnotatorAnchorInput;
@@ -250,32 +251,35 @@ function start(): void {
     observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true });
   }
 
-  function onSelection(): void {
+  /** Last selection message posted, so selectionchange bursts don't repeat themselves. */
+  let lastSelectionKey = 'null';
+  function postSelection(
+    force: boolean,
+    anchor: TextAnchor | null,
+    rect: { top: number; left: number; bottom: number; right: number } | null,
+  ): void {
+    if (!token) return;
+    const key = JSON.stringify(anchor);
+    if (!force && key === lastSelectionKey) return;
+    lastSelectionKey = key;
+    post({ token, type: 'selection', anchor, quotedText: anchor?.exact ?? '', rect });
+  }
+
+  /** `force` (mouseup) always reports; selectionchange reports only changes. */
+  function onSelection(force = true): void {
     if (!token || !ix) return;
     const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
-      post({ token, type: 'selection', anchor: null, quotedText: '', rect: null });
-      return;
-    }
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return postSelection(force, null, null);
     const range = sel.getRangeAt(0);
-    let anchor;
+    let anchor: TextAnchor | null;
     try {
       anchor = describeAnchor(document, range, { index: ix });
     } catch {
       anchor = null;
     }
-    if (!anchor || anchor.exact.length > MAX_SELECTION_CHARS) {
-      post({ token, type: 'selection', anchor: null, quotedText: '', rect: null });
-      return;
-    }
+    if (!anchor || anchor.exact.length > MAX_SELECTION_CHARS) return postSelection(force, null, null);
     const r = range.getBoundingClientRect();
-    post({
-      token,
-      type: 'selection',
-      anchor,
-      quotedText: anchor.exact,
-      rect: { top: r.top, left: r.left, bottom: r.bottom, right: r.right },
-    });
+    postSelection(force, anchor, { top: r.top, left: r.left, bottom: r.bottom, right: r.right });
   }
 
   function caretTextOffset(x: number, y: number): number | null {
@@ -385,7 +389,14 @@ function start(): void {
 
   injectStyles();
   window.addEventListener('message', onMessage);
-  document.addEventListener('mouseup', () => setTimeout(onSelection, 0));
+  document.addEventListener('mouseup', () => setTimeout(() => onSelection(true), 0));
+  // Touch selection (and handle dragging) never fires mouseup; follow the
+  // native selection instead, trailing-debounced while handles move.
+  let selectionTimer: number | undefined;
+  document.addEventListener('selectionchange', () => {
+    if (selectionTimer !== undefined) clearTimeout(selectionTimer);
+    selectionTimer = window.setTimeout(() => onSelection(false), SELECTION_DEBOUNCE_MS);
+  });
   document.addEventListener('click', onClick, true); // ::highlight is not hit-testable
 }
 

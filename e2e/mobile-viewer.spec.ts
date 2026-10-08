@@ -3,9 +3,29 @@
  * touch selection that hands a quote to the composer explicitly.
  */
 
-import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { expect, test, type BrowserContext, type Frame, type Page } from '@playwright/test';
 
 import { callTool, extractDocumentId, getArtifactFrame, selectPhraseInFrame, waitForLoginCode } from './helpers.js';
+
+/** Native selection only, as a touch drag would leave it: no mouseup is dispatched. */
+async function selectNative(frame: Frame, phrase: string): Promise<void> {
+  await frame.evaluate((needle) => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      const idx = (node.textContent ?? '').indexOf(needle);
+      if (idx === -1) continue;
+      const range = document.createRange();
+      range.setStart(node, idx);
+      range.setEnd(node, idx + needle.length);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      return;
+    }
+    throw new Error(`phrase not found: ${needle}`);
+  }, phrase);
+}
 
 const PHONE = { width: 390, height: 844 };
 const DESKTOP = { width: 1280, height: 900 };
@@ -152,5 +172,78 @@ test.describe('mobile reading view', () => {
     await expect(page.locator('#comments-sidebar')).toBeVisible();
     await expect(page.locator('#comments-title')).toContainText('Changes');
     await expect(page.locator('#ac-composer')).toHaveCount(0);
+  });
+
+  test.describe('touch selection', () => {
+    test('a selection offers Comment on selection without opening the sheet', async () => {
+      await openPhone();
+      const frame = await getArtifactFrame(page);
+      await selectNative(frame, 'quick brown');
+      await expect(page.locator('#mobile-selection')).toBeVisible();
+      await expect(page.locator('#mobile-comments')).toBeHidden();
+      await selectNative(frame, 'quick brown fox');
+      await expect(page.locator('#mobile-selection')).toBeVisible();
+      await expect(page.locator('#comments-sidebar')).toBeHidden();
+      await frame.evaluate(() => window.getSelection()?.removeAllRanges());
+      await expect(page.locator('#mobile-comments')).toBeVisible();
+      await expect(page.locator('#mobile-selection')).toBeHidden();
+    });
+
+    test('the action keeps the quote after the frame selection clears, and saves it', async () => {
+      await openPhone();
+      const frame = await getArtifactFrame(page);
+      await selectNative(frame, 'second paragraph');
+      await selectNative(frame, 'brown fox jumps');
+      await expect(page.locator('#mobile-selection')).toBeVisible();
+      await page.locator('#mobile-selection').click();
+      await frame.evaluate(() => window.getSelection()?.removeAllRanges());
+      await page.waitForTimeout(400);
+      const composer = page.locator('#ac-composer');
+      await expect(composer).toBeVisible();
+      await expect(composer.locator('.thread-quote')).toHaveText('brown fox jumps');
+      await expect(composer.locator('textarea')).toBeFocused();
+      await composer.locator('textarea').fill('Touch comment.');
+      await composer.locator('button', { hasText: 'Save' }).click();
+      const card = page.locator('.thread-card', { hasText: 'Touch comment.' });
+      await expect(card).toBeVisible();
+      await expect(card.locator('.thread-quote')).toHaveText('brown fox jumps');
+
+      await page.reload();
+      await page.frameLocator('#artifact-frame').locator('body').waitFor();
+      await page.locator('#mobile-comments').click();
+      await expect(page.locator('.thread-card', { hasText: 'Touch comment.' })).toBeVisible();
+      await expect(page.locator('.thread-card:not(.stub)', { hasText: 'Touch comment.' }).locator('.badge-orphaned')).toHaveCount(0);
+    });
+
+    test('a draft survives closing the sheet and Cancel discards it', async () => {
+      await openPhone();
+      const frame = await getArtifactFrame(page);
+      await selectNative(frame, 'second paragraph');
+      await page.locator('#mobile-selection').click();
+      await page.locator('#ac-composer textarea').fill('unsent draft');
+      await frame.evaluate(() => window.getSelection()?.removeAllRanges());
+      await page.locator('#close-sheet').click();
+      await expect(page.locator('#comments-sidebar')).toBeHidden();
+      await page.locator('#mobile-comments').click();
+      await expect(page.locator('#ac-composer .thread-quote')).toHaveText('second paragraph');
+      await expect(page.locator('#ac-composer textarea')).toHaveValue('unsent draft');
+      await page.locator('#ac-composer button', { hasText: 'Cancel' }).click();
+      await expect(page.locator('#ac-composer')).toBeHidden();
+    });
+
+    test('old versions offer no comment action', async () => {
+      await openPhone(`/d/${slug}?version=1`);
+      await selectNative(await getArtifactFrame(page), 'quick brown');
+      await page.waitForTimeout(500);
+      await expect(page.locator('#mobile-selection')).toBeHidden();
+    });
+
+    test('desktop mouse selection still opens the composer', async () => {
+      await page.setViewportSize(DESKTOP);
+      await page.goto(`/d/${slug}`);
+      await page.frameLocator('#artifact-frame').locator('#p1').waitFor();
+      expect(await selectPhraseInFrame(await getArtifactFrame(page), 'fox jumps')).toBe(true);
+      await expect(page.locator('#ac-composer .thread-quote')).toHaveText('fox jumps');
+    });
   });
 });

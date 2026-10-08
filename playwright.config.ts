@@ -8,7 +8,11 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:3789',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // Touch WebKit for the mobile viewer only; the spec sets its own viewports.
+    { name: 'mobile-webkit', testMatch: 'mobile-viewer.spec.ts', use: { ...devices['iPhone 14'] } },
+  ],
   webServer: {
     command: 'bash e2e/start-server.sh',
     url: 'http://localhost:3789/healthz',

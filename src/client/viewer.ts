@@ -738,6 +738,10 @@ function init(): void {
   let focusedCommentId: string | null = null;
   let pendingAnchor: TextAnchor | null = null;
   let pendingQuotedText = '';
+  /** Live selection in the frame, on phones: not yet a draft, only offered through Comment on selection. */
+  let liveSelection: { anchor: TextAnchor; quotedText: string } | null = null;
+  /** Copy taken when the action is first pressed, before focus moving can clear the live selection. */
+  let pressedSelection: { anchor: TextAnchor; quotedText: string } | null = null;
 
   // --- mentions ---------------------------------------------------------
   // Teammates the @ picker offers (everyone but the viewer). Loaded once;
@@ -1726,6 +1730,25 @@ function init(): void {
     alignCards();
   });
 
+  mobile.onCommentOnSelection(
+    () => {
+      pressedSelection = liveSelection;
+    },
+    () => {
+      const selected = pressedSelection ?? liveSelection;
+      pressedSelection = null;
+      if (!selected) return;
+      // Commit the draft anchor, then open the sheet and focus the composer
+      // inside this same user gesture so the keyboard opens on touch browsers.
+      pendingAnchor = selected.anchor;
+      pendingQuotedText = selected.quotedText;
+      showComposer(selected.quotedText);
+      mobile.openPanel();
+      sidebar.scrollTop = 0;
+      composerTextarea.focus();
+    },
+  );
+
   // --- bridge -----------------------------------------------------------
   loadFrame(iframe, data.slug);
   const bridge = new AnnotatorBridge(iframe, {
@@ -1742,6 +1765,15 @@ function init(): void {
     },
     onSelection: (anchor, quotedText, _rect) => {
       if (!data.isCurrentVersion || !data.access.canComment) return;
+      if (mobile.isMobile()) {
+        // Never open the sheet or move focus here: that would cancel the
+        // native selection handles. Only offer the action; a committed draft
+        // is untouched by later (including empty) selections.
+        liveSelection = anchor ? { anchor, quotedText } : null;
+        if (anchor) pressedSelection = null;
+        mobile.setSelectionAvailable(anchor !== null);
+        return;
+      }
       if (anchor) {
         pendingAnchor = anchor;
         pendingQuotedText = quotedText;
@@ -1752,8 +1784,10 @@ function init(): void {
     },
     onHighlightClick: (commentIds) => {
       const id = commentIds.find((candidate) => threads.some((t) => t.id === candidate));
-      if (id) focusThread(id, { scroll: true });
-      else clearFocus();
+      if (id) {
+        focusThread(id, { scroll: true });
+        if (mobile.isMobile()) mobile.openPanel();
+      } else clearFocus();
     },
     onAnchorStates: (states) => {
       // The annotator re-sends states on every artifact DOM mutation; only
