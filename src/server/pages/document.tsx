@@ -159,15 +159,43 @@ main { flex: 1 1 auto; min-height: 0; max-width: none; width: 100%; margin: 0; p
 .comment-filter button:hover { color: var(--color-accent); }
 .comment-filter button[aria-selected='true'] { background: var(--color-surface); color: var(--color-ink); box-shadow: var(--shadow-whisper); }
 .comment-filter .count { font-family: var(--font-mono); font-size: 10px; margin-left: 4px; color: var(--color-muted); }
-.sidebar.collapsed .comment-filter { display: none; }
 #no-highlights-banner { padding: 8px 12px; background: #fef3c7; font-size: 12px; border-bottom: 1px solid #fde68a; }
-.sidebar.collapsed { width: 40px; }
-.sidebar.collapsed .sidebar-header, .sidebar.collapsed #no-highlights-banner, .sidebar.collapsed .sidebar-inner { display: none; }
+/* The collapsed rail is a desktop preference; on phones the sidebar is a bottom sheet. */
+@media (min-width: 701px) {
+  .sidebar.collapsed .comment-filter { display: none; }
+  .sidebar.collapsed { width: 40px; }
+  .sidebar.collapsed .sidebar-header, .sidebar.collapsed #no-highlights-banner, .sidebar.collapsed .sidebar-inner { display: none; }
+}
 .sidebar-expand { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 12px 0; width: 100%; background: transparent; border: none; cursor: pointer; color: var(--color-muted); transition: background 150ms ease-out, color 150ms ease-out; }
 .sidebar-expand:hover { background: var(--color-bg); color: var(--color-accent); }
 .sidebar-expand .rail-label { writing-mode: vertical-rl; font-size: 12px; font-weight: 650; letter-spacing: 0.05em; text-transform: uppercase; }
 [hidden] { display: none !important; }
 @media (max-width: 900px) { .sidebar { width: 300px; } }
+.mobile-bar, .sheet-backdrop, .sheet-close { display: none; }
+@media (max-width: 700px) {
+  /* Reading view: only the compact bar above the artifact. */
+  body:has(.viewer[data-layout='reading']) header.site-header,
+  body:has(.viewer[data-layout='reading']) .viewer-toolbar { display: none; }
+  .viewer[data-layout='full'] .mobile-bar-title { display: none; }
+  .viewer-toolbar { flex-wrap: wrap; gap: 6px 12px; padding: 8px 12px; }
+  .viewer-toolbar h1 { flex: 1 1 100%; }
+  .viewer-toolbar .toolbar-spacer { display: none; }
+  .mobile-bar { display: flex; flex: none; align-items: center; gap: 8px; min-height: 44px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
+  .mobile-bar-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .viewer[data-layout='full'] .mobile-bar { justify-content: flex-end; }
+  .mobile-bar-version { flex: none; font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: #b45309; background: #fef3c7; border-radius: 4px; padding: 2px 6px; }
+  .mobile-bar button { flex: none; min-height: 44px; min-width: 44px; padding: 0 10px; font: inherit; font-size: 13px; font-weight: 500; color: var(--color-accent); background: transparent; border: none; border-radius: 6px; cursor: pointer; }
+  .mobile-bar #mobile-layout { color: var(--color-muted); }
+  .sidebar-expand, #collapse-sidebar { display: none !important; }
+  .sheet-close { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; margin: -8px -8px -8px 0; padding: 0; font-size: 22px; line-height: 1; color: var(--color-muted); background: transparent; border: none; cursor: pointer; }
+  .sidebar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; width: auto; height: auto; max-height: 80dvh; border-left: 0; border-top: 1px solid var(--color-border); border-radius: 14px 14px 0 0; box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.18); padding-bottom: env(safe-area-inset-bottom); visibility: hidden; transform: translateY(100%); transition: transform 180ms ease-out, visibility 0s linear 180ms; }
+  .viewer[data-sheet='open'] .sidebar { visibility: visible; transform: none; transition: transform 180ms ease-out; }
+  .viewer[data-sheet='open'] .sheet-backdrop { display: block; position: fixed; inset: 0; z-index: 30; background: rgba(0, 0, 0, 0.35); }
+  .sidebar-inner { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  /* 16px keeps iOS from zooming the page when a field gains focus. */
+  #sidebar #ac-composer textarea, #sidebar .reply-form textarea, #sidebar .edit-form textarea { font-size: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { .sidebar { transition: none !important; } }
 `;
 
 /**
@@ -269,8 +297,19 @@ export const DocumentPage: FC<DocumentPageProps> = ({
           decode inside <style>, silently dropping those rules. */}
       <style dangerouslySetInnerHTML={{ __html: viewerCss }}></style>
       <script id="viewer-data" type="application/json" dangerouslySetInnerHTML={{ __html: viewerData }}></script>
-      <div class="viewer">
+      <div class="viewer" data-layout="reading" data-sheet="closed">
         <div class="viewer-main">
+          <div class="mobile-bar" id="mobile-bar">
+            <span class="mobile-bar-title">{document.title}</span>
+            {compareVersion ? (
+              <span class="mobile-bar-version">v{compareVersion.number}→v{shownVersion.number}</span>
+            ) : (
+              !isCurrent && <span class="mobile-bar-version">v{shownVersion.number} · old</span>
+            )}
+            <button type="button" id="mobile-comments">{compareVersion ? 'Changes' : 'Comments'}</button>
+            <button type="button" id="mobile-selection" hidden>Comment on selection</button>
+            <button type="button" id="mobile-layout">Full layout</button>
+          </div>
           <div class="viewer-toolbar">
             <h1>{document.title}</h1>
             {compareVersion ? (
@@ -510,6 +549,7 @@ export const DocumentPage: FC<DocumentPageProps> = ({
             </div>
           )}
         </div>
+        <div class="sheet-backdrop" id="sheet-backdrop"></div>
         <aside class="sidebar" id="comments-sidebar">
           <button
             type="button"
@@ -549,6 +589,7 @@ export const DocumentPage: FC<DocumentPageProps> = ({
                 </svg>
               </button>
             </div>
+            <button type="button" id="close-sheet" class="sheet-close" aria-label="Close">×</button>
           </div>
           <div class="comment-filter" role="tablist" aria-label="Which comments to show" hidden={compareVersion !== null}>
             <button type="button" role="tab" data-filter="open" aria-selected="true">

@@ -16,6 +16,7 @@ import { AttachmentTray, COMMENT_IMAGES_CSS, commentRequestBody, imageStrip, typ
 import { COMMENT_MARKDOWN_CSS, renderCommentBody } from './commentMarkdown.js';
 import { MENTION_CSS, MENTION_OPEN_ATTR, MentionPicker, type Mentionable, type MentionDTO } from './mentions.js';
 import { initMovePickers, showStoredProjectFeedback } from './projectPicker.js';
+import { initMobileViewer } from './mobileViewer.js';
 import { initSidebarCollapse } from './sidebarCollapse.js';
 
 const POLL_INTERVAL_MS = 30_000;
@@ -713,6 +714,11 @@ function init(): void {
     });
   });
 
+  // Compact top bar and bottom sheet on phones. Layout changes re-fit the
+  // frame and re-align cards through the resize listeners below (and
+  // compare.ts's), so there is one place that reacts to geometry.
+  const mobile = initMobileViewer(() => window.dispatchEvent(new Event('resize')));
+
   // Compare mode replaces the comment sidebar with the list of changes
   // between two versions and paints them inside two frames; nothing below
   // (comments, composer, alignment) applies there.
@@ -1405,6 +1411,8 @@ function init(): void {
     const title = openCount > 0 ? `Comments (${openCount})` : 'Comments';
     if (commentsTitle) commentsTitle.textContent = title;
     if (railLabel) railLabel.textContent = title;
+    const mobileComments = document.getElementById('mobile-comments');
+    if (mobileComments) mobileComments.textContent = title;
     if (prevButton) prevButton.disabled = shown.length === 0;
     if (nextButton) nextButton.disabled = shown.length === 0;
 
@@ -1484,6 +1492,20 @@ function init(): void {
     if (!iframe || !sidebar) return;
     if (alignedCards.size === 0) {
       alignedZone.style.height = '0px';
+      return;
+    }
+    if (mobile.isMobile()) {
+      // The bottom sheet lists threads in normal flow: clear anything the
+      // desktop pass left behind (it re-runs when the breakpoint is crossed back).
+      for (const card of alignedCards.values()) {
+        card.classList.remove('aligned', 'stub', 'collapsed', 'edge-hidden');
+        card.style.top = '';
+        delete card.dataset['offscreen'];
+        if (card.parentElement !== alignedZone) alignedZone.insertBefore(card, aboveMore);
+      }
+      aboveMore.hidden = true;
+      belowMore.hidden = true;
+      alignedZone.style.height = '';
       return;
     }
     const frameRect = iframe.getBoundingClientRect();
