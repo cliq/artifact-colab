@@ -110,7 +110,24 @@ export function initMobileViewer(onLayoutChange: () => void): MobileViewer {
   closeButton?.addEventListener('click', closePanel);
   backdrop?.addEventListener('click', closePanel);
   document.addEventListener('keydown', (e) => {
-    if (open && e.key === 'Escape' && !e.defaultPrevented) closePanel();
+    if (!open) return;
+    if (e.key === 'Escape' && !e.defaultPrevented) return closePanel();
+    // Wrap Tab inside the sheet (inert background alone lets focus escape to browser chrome).
+    // Focus in another dialog, such as the image lightbox, is left alone.
+    if (e.key !== 'Tab' || !sheet || !sheet.contains(e.target as Node)) return;
+    const focusable = Array.from(
+      sheet.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'),
+    ).filter((node) => !node.hasAttribute('disabled') && node.getClientRects().length > 0);
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (!first || !last) return;
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
   });
 
   layoutButton?.addEventListener('click', () => {

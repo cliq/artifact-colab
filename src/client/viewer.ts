@@ -1765,13 +1765,14 @@ function init(): void {
     },
     onSelection: (anchor, quotedText, _rect) => {
       if (!data.isCurrentVersion || !data.access.canComment) return;
+      // Tracked at every width so crossing the breakpoint never leaves a stale quote.
+      liveSelection = anchor ? { anchor, quotedText } : null;
+      if (anchor) pressedSelection = null;
+      mobile.setSelectionAvailable(anchor !== null);
       if (mobile.isMobile()) {
         // Never open the sheet or move focus here: that would cancel the
         // native selection handles. Only offer the action; a committed draft
         // is untouched by later (including empty) selections.
-        liveSelection = anchor ? { anchor, quotedText } : null;
-        if (anchor) pressedSelection = null;
-        mobile.setSelectionAvailable(anchor !== null);
         return;
       }
       if (anchor) {

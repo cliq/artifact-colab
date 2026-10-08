@@ -135,6 +135,16 @@ test.describe('mobile reading view', () => {
     await expect(sheet).toBeHidden();
   });
 
+  test('Tab wraps inside the open sheet', async () => {
+    await openPhone();
+    await page.locator('#mobile-comments').click();
+    await expect(page.locator('#close-sheet')).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    const inSheet = await page.evaluate(() => document.getElementById('comments-sidebar')!.contains(document.activeElement));
+    expect(inSheet).toBe(true);
+    await page.keyboard.press('Escape');
+  });
+
   test('desktop sidebar preference survives crossing the breakpoint', async () => {
     await openPhone();
     await page.evaluate(() => localStorage.setItem('artifact-colab:comments-collapsed', '1'));
@@ -229,6 +239,19 @@ test.describe('mobile reading view', () => {
       await expect(page.locator('#ac-composer textarea')).toHaveValue('unsent draft');
       await page.locator('#ac-composer button', { hasText: 'Cancel' }).click();
       await expect(page.locator('#ac-composer')).toBeHidden();
+    });
+
+    test('a selection cleared on desktop width is not offered after returning to the phone', async () => {
+      await openPhone();
+      const frame = await getArtifactFrame(page);
+      await selectNative(frame, 'quick brown');
+      await expect(page.locator('#mobile-selection')).toBeVisible();
+      await page.setViewportSize(DESKTOP);
+      await frame.evaluate(() => window.getSelection()?.removeAllRanges());
+      await page.waitForTimeout(400);
+      await page.setViewportSize(PHONE);
+      await expect(page.locator('#mobile-selection')).toBeHidden();
+      await expect(page.locator('#mobile-comments')).toBeVisible();
     });
 
     test('old versions offer no comment action', async () => {
