@@ -1,6 +1,6 @@
 /**
  * MCP endpoint (Streamable HTTP, stateless) exposing publish_artifact,
- * get_artifact, staged asset uploads, Project discovery and moves, comments
+ * get_artifact, staged asset uploads, Project and artifact discovery, moves, comments
  * (with their images), and deletion. Auth is
  * a personal access token via `Authorization:
  * Bearer` — the bearerAuth middleware resolves the user and token, and both
@@ -38,7 +38,8 @@ import { MAX_COMMENT_IMAGE_BYTES, MAX_COMMENT_IMAGES, validateCommentImages } fr
 import { createReply, createThreadComment, deleteComment, editComment, locateQuote, type CommentVia } from './services/comments.js';
 import { deleteDocumentCascade } from './services/documents.js';
 import { publishArtifact } from './services/publish.js';
-import { getProjectForUser, moveArtifact, ProjectError, visibleProjectsForTeam } from './services/projects.js';
+import { documentRowsForTeam } from './services/documentLists.js';
+import { findVisibleProjectByName, getProjectForUser, moveArtifact, ProjectError, visibleProjectsForTeam } from './services/projects.js';
 
 import { and, eq } from 'drizzle-orm';
 
@@ -234,7 +235,8 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
     {
       title: 'List projects',
       description:
-        "List the Projects visible to this token's user in its team, ordered by name. Counts include only artifacts that user can read.",
+        "List the Projects visible to this token's user in its team, ordered by name. Counts include only artifacts that user can read. " +
+        'Use list_artifacts to see the artifacts in one.',
       inputSchema: z.object({}),
     },
     async () => {
@@ -247,6 +249,48 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         last_published_at: project.lastPublishedAt?.toISOString() ?? null,
       }));
       return { content: [{ type: 'text', text: JSON.stringify({ projects: projectRows }, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
+    'list_artifacts',
+    {
+      title: 'List artifacts',
+      description:
+        "List the artifacts this token's user can read in its team, newest first: in one Project by its current name, " +
+        'in Unfiled with null, or across the whole team when project is omitted. ' +
+        'Each document_id works with get_artifact, get_comments, publish_artifact (to revise) and move_artifact. ' +
+        'Use list_projects to discover Project names.',
+      inputSchema: z.object({
+        project: z
+          .string()
+          .nullable()
+          .optional()
+          .describe('Existing Project name; null for Unfiled; omit for every readable artifact in the team'),
+      }),
+    },
+    async ({ project }) => {
+      if (!used()) return toolError('token is no longer authorized');
+      try {
+        const visible = visibleProjectsForTeam(db, teamId, user.id);
+        const projectId = project === undefined ? undefined : project === null ? null : findVisibleProjectByName(db, teamId, user.id, project).id;
+        const artifacts = documentRowsForTeam(db, teamId, user.id, visible, projectId).map((row) => ({
+          document_id: row.id,
+          title: row.title,
+          url: `${config.baseUrl}/d/${row.id}`,
+          project: row.project?.name ?? null,
+          visibility: row.visibility,
+          owner: row.ownerEmail,
+          role: row.effectiveRole ?? null,
+          version_count: row.versionCount,
+          open_comment_count: row.openCommentCount,
+          last_published_at: row.lastPublishedAt?.toISOString() ?? null,
+        }));
+        return { content: [{ type: 'text', text: JSON.stringify({ artifacts }, null, 2) }] };
+      } catch (error) {
+        if (error instanceof ProjectError) return toolError(error.message);
+        throw error;
+      }
     },
   );
 

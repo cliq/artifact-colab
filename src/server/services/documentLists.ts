@@ -50,11 +50,12 @@ function documentRow(db: DB, doc: Document, userId: string, projectNames?: Map<s
   };
 }
 
-export function documentRowsForTeam(db: DB, teamId: string, userId: string, visibleProjects: ProjectSummary[], projectId?: string): DocumentListRow[] {
+/** `projectId` narrows to one Project; `null` narrows to Unfiled; omitted lists every readable artifact. */
+export function documentRowsForTeam(db: DB, teamId: string, userId: string, visibleProjects: ProjectSummary[], projectId?: string | null): DocumentListRow[] {
   if (!db.select().from(teamMembers).where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, userId))).get()) return [];
   const names = new Map(visibleProjects.map((p) => [p.id, p.name]));
   return db.select().from(documents)
-    .where(and(eq(documents.teamId, teamId), readableDocumentCondition(userId), projectId === undefined ? undefined : eq(documents.projectId, projectId)))
+    .where(and(eq(documents.teamId, teamId), readableDocumentCondition(userId), projectId === undefined ? undefined : projectId === null ? isNull(documents.projectId) : eq(documents.projectId, projectId)))
     .orderBy(desc(documents.createdAt)).all().map((doc) => documentRow(db, doc, userId, names));
 }
 

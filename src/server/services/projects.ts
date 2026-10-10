@@ -236,21 +236,25 @@ export function moveArtifact(
       return null;
     }
 
-    const normalized = normalizeProjectName(project);
-    const destination = tx
-      .select()
-      .from(projects)
-      .where(and(eq(projects.teamId, teamId), eq(projects.nameKey, normalized.nameKey)))
-      .get();
-    if (!destination || !getProjectForUser(tx, destination.id, userId)) {
-      throw new ProjectError('Project not found', 404);
-    }
-
+    const destination = findVisibleProjectByName(tx, teamId, userId, project);
     if (document.projectId !== destination.id) {
       tx.update(documents).set({ projectId: destination.id }).where(eq(documents.id, document.id)).run();
     }
     return summaries(tx, teamId, userId, destination.id)[0]!;
   });
+}
+
+/** Look up an existing Project by its current name, as the user sees it; throws 404 when absent or hidden. */
+export function findVisibleProjectByName(db: DBOrTx, teamId: string, userId: string, name: unknown): ProjectSummary {
+  const normalized = normalizeProjectName(name);
+  const row = db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.teamId, teamId), eq(projects.nameKey, normalized.nameKey)))
+    .get();
+  const visible = row ? getProjectForUser(db, row.id, userId) : undefined;
+  if (!visible) throw new ProjectError('Project not found', 404);
+  return visible;
 }
 
 /** Resolve or create by name inside the caller's publishing transaction. */

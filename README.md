@@ -16,7 +16,7 @@ Project visibility follows artifact access. An empty Project is visible to all c
 
 Team members can create Projects and can rename or delete any Project they can access. Deleting a Project returns all of its artifacts to Unfiled while preserving their versions, comments, sharing, and URLs. Moving an artifact requires edit permission and changes only its current assignment.
 
-Agents can pass `project: "Website launch"` to `publish_artifact` to reuse an accessible Project or create it when the name is unused. Passing JSON `null` clears the assignment; omitting `project` on a revision preserves the assignment at publish time. The multipart `/api/publish` endpoint uses an absent `project` field to preserve and an empty field to clear. Project names use current-name semantics: publishing with an old name after a rename creates a new Project if that name is now unused. `list_projects` discovers visible destinations, while `move_artifact` moves to an existing Project name or Unfiled without publishing a new version.
+Agents can pass `project: "Website launch"` to `publish_artifact` to reuse an accessible Project or create it when the name is unused. Passing JSON `null` clears the assignment; omitting `project` on a revision preserves the assignment at publish time. The multipart `/api/publish` endpoint uses an absent `project` field to preserve and an empty field to clear. Project names use current-name semantics: publishing with an old name after a rename creates a new Project if that name is now unused. `list_projects` discovers visible destinations, `list_artifacts` lists the artifacts in one Project, in Unfiled, or across the team, and `move_artifact` moves to an existing Project name or Unfiled without publishing a new version.
 
 ## Private collaboration
 
@@ -107,11 +107,11 @@ Use the same configured `DEV_LOGIN_CODE` for these demo emails, or read their si
 
 ## Good to know
 
-- Connected agents get eleven MCP tools: `publish_artifact`, `get_artifact`, `list_projects`, `move_artifact`,
-  `get_comments`, `get_comment_image`, `add_comment`, `edit_comment`, `delete_comment`, `resolve_comment`, and
-  `delete_artifact` — enough to publish and organize a page, fetch it back, read the team's feedback (screenshots
-  included), join the discussion (open a thread on a quoted passage or reply to one), fix or remove their own
-  comments, close out addressed threads, and clean up.
+- Connected agents get thirteen MCP tools: `publish_artifact`, `prepare_asset_upload`, `get_artifact`, `list_projects`,
+  `list_artifacts`, `move_artifact`, `get_comments`, `get_comment_image`, `add_comment`, `edit_comment`, `delete_comment`,
+  `resolve_comment`, and `delete_artifact` — enough to publish and organize a page, find what's already there, fetch it
+  back, read the team's feedback (screenshots included), join the discussion (open a thread on a quoted passage or
+  reply to one), fix or remove their own comments, close out addressed threads, and clean up.
 - Comments an agent posts through MCP are attributed to the token's owner with an "agent" badge naming the access
   token, so a review from Claude Code and one from a second reader model stay distinguishable in the sidebar and in
   the digest emails. Agents can edit and delete only the comments they posted this way, never what their owner typed.

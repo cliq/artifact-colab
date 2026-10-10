@@ -107,7 +107,7 @@ describe('mcp', () => {
     expect(lastUsed()).not.toBeNull();
   });
 
-  test('lists the twelve tools', async () => {
+  test('lists the thirteen tools', async () => {
     const result = await rpcResult(await rpc('tools/list', {}));
     const names = result.tools.map((t: any) => t.name).sort();
     expect(names).toEqual([
@@ -118,6 +118,7 @@ describe('mcp', () => {
       'get_artifact',
       'get_comment_image',
       'get_comments',
+      'list_artifacts',
       'list_projects',
       'move_artifact',
       'prepare_asset_upload',
@@ -223,6 +224,52 @@ describe('mcp', () => {
     const refused = await callTool('move_artifact', { document_id: privateDocId, project: null }, bobPat);
     expect(refused.isError).toBe(true);
     expect(refused.content[0].text).toContain('cannot move');
+  });
+
+  test('list_artifacts lists readable artifacts by Project, Unfiled, or the whole team', async () => {
+    const titles = async (args: unknown, token = pat) => {
+      const result = await callTool('list_artifacts', args, token);
+      expect(result.isError, result.content[0].text).toBeFalsy();
+      return JSON.parse(result.content[0].text).artifacts.map((a: any) => a.title).sort();
+    };
+
+    expect(await titles({})).toEqual(['Launch brief', 'Private brief', 'Quarterly Report']);
+    expect(await titles({ project: null })).toEqual(['Quarterly Report']);
+
+    const inProject = JSON.parse((await callTool('list_artifacts', { project: 'website LAUNCH' })).content[0].text).artifacts;
+    expect(inProject).toEqual([
+      expect.objectContaining({
+        document_id: expect.any(String),
+        title: 'Launch brief',
+        url: expect.stringMatching(/^http:\/\/colab\.example\.com\/d\//),
+        project: 'Website launch',
+        visibility: 'team',
+        owner: 'alice@example.com',
+        role: 'owner',
+        version_count: 1,
+        open_comment_count: 0,
+      }),
+    ]);
+
+    const unknown = await callTool('list_artifacts', { project: 'Unknown Project' });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.content[0].text).toContain('Project not found');
+
+    // A private artifact shows only to its owner and collaborators.
+    const bob = getOrCreateUser(db, 'bob@example.com', new Date());
+    const bobPat = createToken(db, bob.id, 'team-example', 'bob lister', new Date()).plaintext;
+    const bobPrivate = JSON.parse((await callTool('list_artifacts', { project: 'Private work' }, bobPat)).content[0].text).artifacts;
+    expect(bobPrivate).toEqual([expect.objectContaining({ title: 'Private brief', role: 'viewer' })]);
+    const carol = getOrCreateUser(db, 'carol@example.com', new Date());
+    const carolPat = createToken(db, carol.id, 'team-example', 'carol lister', new Date()).plaintext;
+    expect(await titles({}, carolPat)).toEqual(['Launch brief', 'Quarterly Report']);
+
+    const mallory = getOrCreateUser(db, 'mallory@evil.com', new Date());
+    const malloryPat = createToken(db, mallory.id, 'team-evil', 'evil lister', new Date()).plaintext;
+    expect(await titles({}, malloryPat)).toEqual([]);
+    const crossTeam = await callTool('list_artifacts', { project: 'Website launch' }, malloryPat);
+    expect(crossTeam.isError).toBe(true);
+    expect(crossTeam.content[0].text).toContain('Project not found');
   });
 
   test('publish_artifact rejects oversized html', async () => {
