@@ -1,6 +1,6 @@
 /**
  * MCP endpoint (Streamable HTTP, stateless) exposing publish_artifact,
- * get_artifact, staged asset uploads, Project and artifact discovery, moves, comments
+ * edit_artifact, get_artifact, staged asset uploads, Project and artifact discovery, moves, comments
  * (with their images), and deletion. Auth is
  * a personal access token via `Authorization:
  * Bearer` — the bearerAuth middleware resolves the user and token, and both
@@ -37,7 +37,7 @@ import { indexVersionHtml } from './services/anchorStates.js';
 import { MAX_COMMENT_IMAGE_BYTES, MAX_COMMENT_IMAGES, validateCommentImages } from './services/commentImages.js';
 import { createReply, createThreadComment, deleteComment, editComment, locateQuote, type CommentVia } from './services/comments.js';
 import { deleteDocumentCascade } from './services/documents.js';
-import { publishArtifact } from './services/publish.js';
+import { editArtifact, MAX_EDITS_PER_CALL, publishArtifact } from './services/publish.js';
 import { documentRowsForTeam } from './services/documentLists.js';
 import { findVisibleProjectByName, getProjectForUser, moveArtifact, ProjectError, visibleProjectsForTeam } from './services/projects.js';
 
@@ -79,6 +79,7 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         'and hands your Markdown source back from get_artifact when you revise. ' +
         'Without document_id, creates a new document and returns its shareable URL. ' +
         'With document_id, appends a new version to that document; existing comments re-anchor onto the new version where their quoted text still exists. ' +
+        'For targeted changes to an existing artifact, use edit_artifact instead of resending the whole source. ' +
         'Pass project by name to assign the artifact, creating that Project if the name is unused; pass null for Unfiled. ' +
         'Omitting project leaves a revision in its current Project. Project names are current: after a rename, the old unused name creates a new Project. ' +
         'Binary files (screenshots, images) are uploaded as assets instead of being inlined in the HTML: reference each one by its exact name ' +
@@ -175,6 +176,64 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
       return {
         content: [{ type: 'text', text: lines.join('\n') }],
       };
+    },
+  );
+
+  server.registerTool(
+    'edit_artifact',
+    {
+      title: 'Edit artifact',
+      description:
+        'Revise an existing artifact by exact find-and-replace on its current version, without downloading or resending the whole source — ' +
+        'the server applies the edits and publishes the result as a new version (assets carry over; comments re-anchor as with publish_artifact). ' +
+        'Prefer this over publish_artifact for targeted changes, and whenever you have no local copy of a large artifact. ' +
+        'Edits apply in order, each to the text left by the ones before it, against the stored source: the HTML, or the Markdown for ' +
+        'artifacts published as Markdown. Each old_str must match that source exactly, whitespace included, and occur exactly once ' +
+        '(include surrounding text to disambiguate, or set replace_all). All or nothing: if any edit misses, nothing is published and the ' +
+        'error names the edit. Pass expected_version (the version you read with get_artifact) so the edit is refused if someone published since. ' +
+        'To see the source first, call get_artifact; for a large artifact it returns a curl command to download it.',
+      inputSchema: z.object({
+        document_id: z.string().describe('Existing document ID'),
+        edits: z
+          .array(
+            z.object({
+              old_str: z.string().min(1).describe('Exact text in the current source to replace'),
+              new_str: z.string().describe('Replacement text; empty deletes old_str'),
+              replace_all: z.boolean().optional().describe('Replace every occurrence instead of requiring exactly one'),
+            }),
+          )
+          .min(1)
+          .max(MAX_EDITS_PER_CALL)
+          .describe(`Up to ${MAX_EDITS_PER_CALL} replacements, applied in order`),
+        expected_version: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Version number the edits were written against; refused if another version is current'),
+        title: z.string().min(1).max(300).optional().describe('New title; omit to keep the current one'),
+      }),
+    },
+    async ({ document_id, edits, expected_version, title }) => {
+      if (!used()) return toolError('token is no longer authorized');
+      const outcome = editArtifact(db, config, user, teamId, {
+        documentId: document_id,
+        edits: edits.map((e) => ({ oldStr: e.old_str, newStr: e.new_str, replaceAll: e.replace_all })),
+        expectedVersion: expected_version,
+        title,
+      });
+      if (!outcome.ok) return toolError(outcome.error);
+      const n = edits.length;
+      const lines = [
+        `Applied ${n} edit${n === 1 ? '' : 's'} to version ${outcome.baseVersion} and published version ${outcome.versionNumber}: ${outcome.url}`,
+        `document_id: ${outcome.documentId}`,
+        `project: ${outcome.project ?? 'Unfiled'}`,
+      ];
+      if (outcome.orphaned > 0) {
+        const o = outcome.orphaned;
+        lines.push(`${o} previously-anchored comment${o === 1 ? '' : 's'} no longer match and ${o === 1 ? 'is' : 'are'} orphaned.`);
+      }
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
     },
   );
 
@@ -327,7 +386,8 @@ function buildMcpServer(deps: { db: DB; config: Config }, user: User, token: Tok
         'Fetch the published source of a document, exactly as it was published — HTML, or Markdown for versions published via `markdown` ' +
         '(latest version unless a version number is given). ' +
         'Small artifacts are returned inline; for larger ones the result is a ready-to-run curl command that downloads the ' +
-        'source to disk instead — run it as given.',
+        'source to disk instead — run it as given. ' +
+        'To change an artifact, you do not need the whole source in hand: call edit_artifact with exact old_str/new_str replacements.',
       inputSchema: z.object({
         document_id: z.string(),
         version: z.number().int().positive().optional().describe('Version number to fetch; omit for the current version'),

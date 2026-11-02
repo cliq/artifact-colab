@@ -107,13 +107,14 @@ describe('mcp', () => {
     expect(lastUsed()).not.toBeNull();
   });
 
-  test('lists the thirteen tools', async () => {
+  test('lists the fourteen tools', async () => {
     const result = await rpcResult(await rpc('tools/list', {}));
     const names = result.tools.map((t: any) => t.name).sort();
     expect(names).toEqual([
       'add_comment',
       'delete_artifact',
       'delete_comment',
+      'edit_artifact',
       'edit_comment',
       'get_artifact',
       'get_comment_image',
@@ -579,6 +580,162 @@ describe('mcp', () => {
     expect(db.select().from(versions).where(eq(versions.documentId, documentId)).all()).toHaveLength(0);
     expect(db.select().from(comments).where(eq(comments.documentId, documentId)).all()).toHaveLength(0);
   });
+  describe('edit_artifact', () => {
+    const publish = async (args: Record<string, unknown>, token = pat) => {
+      const result = await callTool('publish_artifact', args, token);
+      expect(result.isError, result.content[0].text).toBeFalsy();
+      return (result.content[0].text as string).match(/document_id: (\w+)/)![1]!;
+    };
+    const versionCount = (docId: string) => db.select().from(versions).where(eq(versions.documentId, docId)).all().length;
+    const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    const source = async (docId: string) => (await callTool('get_artifact', { document_id: docId })).content[1].text as string;
+
+    test('applies ordered edits to the current HTML and publishes a new version', async () => {
+      const docId = await publish({ title: 'Release notes', html: '<h1>Release 1.0</h1><p>Fixes: none.</p><p>Owner: TBD</p>' });
+      const result = await callTool('edit_artifact', {
+        document_id: docId,
+        expected_version: 1,
+        edits: [
+          { old_str: 'Release 1.0', new_str: 'Release 1.1' },
+          { old_str: 'Fixes: none.', new_str: 'Fixes: library crash.' },
+          { old_str: 'Release 1.1</h1>', new_str: 'Release 1.1 (beta)</h1>' },
+        ],
+      });
+      expect(result.isError, result.content[0].text).toBeFalsy();
+      const text = result.content[0].text as string;
+      expect(text).toContain('Applied 3 edits to version 1 and published version 2');
+      expect(text).toContain(`document_id: ${docId}`);
+      expect(await source(docId)).toBe('<h1>Release 1.1 (beta)</h1><p>Fixes: library crash.</p><p>Owner: TBD</p>');
+      const header = (await callTool('get_artifact', { document_id: docId })).content[0].text as string;
+      expect(header).toContain('"Release notes"');
+    });
+
+    test('replace_all replaces every occurrence and title renames', async () => {
+      const docId = await publish({ title: 'Draft', html: '<p>foo</p><p>foo</p>' });
+      const ambiguous = await callTool('edit_artifact', { document_id: docId, edits: [{ old_str: 'foo', new_str: 'bar' }] });
+      expect(ambiguous.isError).toBe(true);
+      expect(ambiguous.content[0].text).toContain('edit 1 (old_str "foo") occurs 2 times');
+
+      const result = await callTool('edit_artifact', {
+        document_id: docId,
+        title: 'Final',
+        edits: [{ old_str: 'foo', new_str: 'bar', replace_all: true }],
+      });
+      expect(result.isError, result.content[0].text).toBeFalsy();
+      expect(await source(docId)).toBe('<p>bar</p><p>bar</p>');
+      expect((await callTool('get_artifact', { document_id: docId })).content[0].text).toContain('"Final"');
+    });
+
+    test('edits Markdown-published artifacts as Markdown', async () => {
+      const docId = await publish({ title: 'Notes', markdown: '# Notes\n\n- alpha\n- beta\n' });
+      const result = await callTool('edit_artifact', { document_id: docId, edits: [{ old_str: '- beta\n', new_str: '- beta\n- gamma\n' }] });
+      expect(result.isError, result.content[0].text).toBeFalsy();
+      const fetched = await callTool('get_artifact', { document_id: docId });
+      expect(fetched.content[0].text).toContain('version 2');
+      expect(fetched.content[0].text).toContain('published as Markdown');
+      expect(fetched.content[1].text).toBe('# Notes\n\n- alpha\n- beta\n- gamma\n');
+      const latest = db.select().from(versions).where(eq(versions.documentId, docId)).all().find((v) => v.number === 2)!;
+      expect(latest.html).toContain('gamma');
+    });
+
+    test('a miss anywhere publishes nothing and names the edit', async () => {
+      const docId = await publish({ title: 'Atomic', html: '<p>one</p><p>two</p>' });
+      const missing = await callTool('edit_artifact', {
+        document_id: docId,
+        edits: [
+          { old_str: 'one', new_str: 'uno' },
+          { old_str: 'three', new_str: 'tres' },
+        ],
+      });
+      expect(missing.isError).toBe(true);
+      const message = missing.content[0].text as string;
+      expect(message).toContain('edit 2 (old_str "three") was not found');
+      expect(message).toContain("version 1's HTML");
+      expect(message).toContain('Nothing was published');
+
+      // Later edits see the text the earlier ones left behind.
+      const chained = await callTool('edit_artifact', {
+        document_id: docId,
+        edits: [
+          { old_str: 'one', new_str: 'uno' },
+          { old_str: 'one', new_str: 'eins' },
+        ],
+      });
+      expect(chained.isError).toBe(true);
+      expect(chained.content[0].text).toContain('after applying the edits before it');
+
+      const noop = await callTool('edit_artifact', { document_id: docId, edits: [{ old_str: 'one', new_str: 'one' }] });
+      expect(noop.isError).toBe(true);
+      expect(noop.content[0].text).toContain('unchanged');
+      expect(versionCount(docId)).toBe(1);
+    });
+
+    test('refuses edits that would grow the source past the cap before building it', async () => {
+      const docId = await publish({ title: 'Bomb', html: '<p>x</p>' });
+      const wide = 'x'.repeat(4096);
+      const result = await callTool('edit_artifact', {
+        document_id: docId,
+        edits: [
+          { old_str: 'x', new_str: wide, replace_all: true },
+          { old_str: 'x', new_str: wide, replace_all: true },
+          { old_str: 'x', new_str: wide, replace_all: true },
+        ],
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('edit 2 would grow the source past the 5 MB cap');
+      expect(versionCount(docId)).toBe(1);
+    });
+
+    test('expected_version refuses edits written against a stale version', async () => {
+      const docId = await publish({ title: 'Raced', html: '<p>status: draft</p>' });
+      await callTool('edit_artifact', { document_id: docId, edits: [{ old_str: 'draft', new_str: 'review' }] });
+      const stale = await callTool('edit_artifact', {
+        document_id: docId,
+        expected_version: 1,
+        edits: [{ old_str: 'status', new_str: 'state' }],
+      });
+      expect(stale.isError).toBe(true);
+      expect(stale.content[0].text).toContain('version 2 is current, not 1');
+      expect(versionCount(docId)).toBe(2);
+    });
+
+    test('keeps assets and anchored comments', async () => {
+      const docId = await publish({
+        title: 'With image',
+        html: '<p>Revenue grew steadily across all segments.</p><img src="shots/chart.png"><p>Draft footer</p>',
+        assets: [{ name: 'shots/chart.png', mime_type: 'image/png', data_base64: PNG_B64 }],
+      });
+      const comment = await callTool('add_comment', { document_id: docId, quoted_text: 'Revenue grew steadily', body: 'Source?' });
+      expect(comment.isError, comment.content[0].text).toBeFalsy();
+
+      const result = await callTool('edit_artifact', { document_id: docId, edits: [{ old_str: 'Draft footer', new_str: 'Final footer' }] });
+      expect(result.isError, result.content[0].text).toBeFalsy();
+      expect(result.content[0].text).not.toContain('orphaned');
+      expect((await callTool('get_artifact', { document_id: docId })).content[0].text).toContain('shots/chart.png');
+      const threads = JSON.parse((await callTool('get_comments', { document_id: docId })).content[0].text).comments;
+      expect(threads[0].anchorState.state).toBe('anchored');
+    });
+
+    test('refuses viewers and other teams before matching any text', async () => {
+      const docId = await publish({ title: 'Locked', html: '<p>secret plan</p>', visibility: 'private' });
+      const owner = getOrCreateUser(db, 'alice@example.com', new Date());
+      const dave = getOrCreateUser(db, 'dave@example.com', new Date());
+      db.insert(documentCollaborators)
+        .values({ documentId: docId, userId: dave.id, role: 'viewer', grantedBy: owner.id, createdAt: new Date(), updatedAt: new Date() })
+        .run();
+      const davePat = createToken(db, dave.id, 'team-example', 'dave', new Date()).plaintext;
+      const viewer = await callTool('edit_artifact', { document_id: docId, edits: [{ old_str: 'nonexistent', new_str: 'x' }] }, davePat);
+      expect(viewer.isError).toBe(true);
+      expect(viewer.content[0].text).toBe('editor permission required');
+
+      const mallory = getOrCreateUser(db, 'mallory@evil.com', new Date());
+      const malloryPat = createToken(db, mallory.id, 'team-evil', 'evil editor', new Date()).plaintext;
+      const crossTeam = await callTool('edit_artifact', { document_id: docId, edits: [{ old_str: 'secret', new_str: 'x' }] }, malloryPat);
+      expect(crossTeam.isError).toBe(true);
+      expect(crossTeam.content[0].text).toBe(`unknown document_id: ${docId}`);
+      expect(versionCount(docId)).toBe(1);
+    });
+  });
 });
 
 describe('mcp assets', () => {
@@ -690,4 +847,5 @@ describe('mcp assets', () => {
     });
     expect(result.isError).toBeFalsy();
   });
+
 });

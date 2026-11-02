@@ -107,10 +107,10 @@ Use the same configured `DEV_LOGIN_CODE` for these demo emails, or read their si
 
 ## Good to know
 
-- Connected agents get thirteen MCP tools: `publish_artifact`, `prepare_asset_upload`, `get_artifact`, `list_projects`,
-  `list_artifacts`, `move_artifact`, `get_comments`, `get_comment_image`, `add_comment`, `edit_comment`, `delete_comment`,
-  `resolve_comment`, and `delete_artifact` — enough to publish and organize a page, find what's already there, fetch it
-  back, read the team's feedback (screenshots included), join the discussion (open a thread on a quoted passage or
+- Connected agents get fourteen MCP tools: `publish_artifact`, `edit_artifact`, `prepare_asset_upload`, `get_artifact`,
+  `list_projects`, `list_artifacts`, `move_artifact`, `get_comments`, `get_comment_image`, `add_comment`, `edit_comment`,
+  `delete_comment`, `resolve_comment`, and `delete_artifact` — enough to publish and organize a page, revise it in place,
+  find what's already there, fetch it back, read the team's feedback (screenshots included), join the discussion (open a thread on a quoted passage or
   reply to one), fix or remove their own comments, close out addressed threads, and clean up.
 - Comments an agent posts through MCP are attributed to the token's owner with an "agent" badge naming the access
   token, so a review from Claude Code and one from a second reader model stay distinguishable in the sidebar and in
@@ -137,6 +137,10 @@ Use the same configured `DEV_LOGIN_CODE` for these demo emails, or read their si
   the `prepare_asset_upload` tool hands out one-time upload URLs, the agent `curl`s each file there without needing
   its token, and `publish_artifact` picks the files up by id in the same version as the HTML. URLs expire after an
   hour and take one file each.
+- Agents can revise an artifact without having its source on hand: `edit_artifact` takes exact `old_str`/`new_str`
+  replacements, applies them on the server to the current version (the Markdown, for Markdown-published artifacts),
+  and publishes the result as a new version. Edits are all-or-nothing, assets carry over, and an optional
+  `expected_version` refuses the edit if someone published since the agent last read it.
 - HTML or Markdown too large for a tool call can be published from disk: `POST /api/publish` accepts a multipart
   upload (source file + assets) with the same bearer token. The `publish_artifact` tool description includes the
   exact command.

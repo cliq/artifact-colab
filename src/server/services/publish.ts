@@ -230,3 +230,134 @@ function publishWithin(db: DBOrTx, config: Config, user: User, scope: { kind: 't
     projectCreated,
   };
 }
+
+/** One exact-text replacement in an artifact's stored source. */
+export interface ArtifactEdit {
+  oldStr: string;
+  newStr: string;
+  /** Replace every occurrence instead of requiring exactly one. */
+  replaceAll?: boolean;
+}
+
+export const MAX_EDITS_PER_CALL = 64;
+
+export type EditArtifactOutcome =
+  | (BasePublishSuccess & { project: string | null; baseVersion: number; format: 'html' | 'markdown' })
+  | { ok: false; status: 400 | 403 | 404 | 409; error: string };
+
+function preview(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return JSON.stringify(flat.length > 60 ? `${flat.slice(0, 57)}...` : flat);
+}
+
+/** Non-overlapping occurrences of `needle` in `haystack`. */
+function countOccurrences(haystack: string, needle: string): number {
+  let count = 0;
+  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + needle.length)) count++;
+  return count;
+}
+
+/**
+ * Applies edits in order to `source`, each against the text left by the ones
+ * before it. All or nothing: the first miss returns its error.
+ */
+export function applyArtifactEdits(
+  source: string,
+  edits: ArtifactEdit[],
+  maxBytes = MAX_HTML_BYTES,
+): { ok: true; text: string } | { ok: false; error: string } {
+  let text = source;
+  let bytes = Buffer.byteLength(source, 'utf8');
+  for (const [index, edit] of edits.entries()) {
+    const label = `edit ${index + 1} (old_str ${preview(edit.oldStr)})`;
+    if (edit.oldStr.length === 0) return { ok: false, error: `edit ${index + 1}: old_str is empty` };
+    const count = countOccurrences(text, edit.oldStr);
+    if (count === 0) {
+      return { ok: false, error: `${label} was not found${index > 0 ? ' after applying the edits before it' : ''}` };
+    }
+    if (count > 1 && !edit.replaceAll) {
+      return { ok: false, error: `${label} occurs ${count} times; include more surrounding text to make it unique, or set replace_all` };
+    }
+    // Checked before allocating: chained replace_all edits can otherwise grow the text exponentially.
+    const replaced = edit.replaceAll ? count : 1;
+    const projected = bytes + replaced * (Buffer.byteLength(edit.newStr, 'utf8') - Buffer.byteLength(edit.oldStr, 'utf8'));
+    if (projected > maxBytes) {
+      return { ok: false, error: `edit ${index + 1} would grow the source past the ${maxBytes / (1024 * 1024)} MB cap` };
+    }
+    bytes = projected;
+    if (edit.replaceAll) {
+      text = text.split(edit.oldStr).join(edit.newStr);
+    } else {
+      const at = text.indexOf(edit.oldStr);
+      text = text.slice(0, at) + edit.newStr + text.slice(at + edit.oldStr.length);
+    }
+  }
+  return { ok: true, text };
+}
+
+/**
+ * Publishes a new version of an existing artifact by applying exact-text edits
+ * to its current version's stored source (the Markdown for Markdown-published
+ * versions, so it stays Markdown), so an agent can revise an artifact without
+ * holding the whole source. Assets are document-scoped and carry over as-is.
+ * Access is checked before any edit is matched, so a miss never reveals
+ * content to someone who could not publish.
+ */
+export function editArtifact(
+  db: DB,
+  config: Config,
+  user: User,
+  teamId: string,
+  input: { documentId: string; edits: ArtifactEdit[]; expectedVersion?: number; title?: string },
+): EditArtifactOutcome {
+  if (input.edits.length === 0) return { ok: false, status: 400, error: 'provide at least one edit' };
+  if (input.edits.length > MAX_EDITS_PER_CALL) return { ok: false, status: 400, error: `at most ${MAX_EDITS_PER_CALL} edits per call` };
+  try {
+    return db.transaction((tx): EditArtifactOutcome => {
+      const access = resolveDocumentAccess(tx, input.documentId, user.id);
+      const doc = access?.document;
+      if (!access?.isMember || !doc || doc.teamId !== teamId) {
+        return { ok: false, status: 404, error: `unknown document_id: ${input.documentId}` };
+      }
+      if (!access.canPublish) return { ok: false, status: 403, error: 'editor permission required' };
+      const current = doc.currentVersionId ? tx.select().from(versions).where(eq(versions.id, doc.currentVersionId)).get() : undefined;
+      if (!current) return { ok: false, status: 404, error: `document ${doc.id} has no published version` };
+      if (input.expectedVersion !== undefined && input.expectedVersion !== current.number) {
+        return {
+          ok: false,
+          status: 409,
+          error:
+            `version ${current.number} is current, not ${input.expectedVersion}: someone published since you read it. ` +
+            'Nothing was published. Fetch the current version with get_artifact, then redo the edits against it.',
+        };
+      }
+
+      const format = current.sourceMarkdown !== null ? 'markdown' : 'html';
+      const source = current.sourceMarkdown ?? current.html;
+      const applied = applyArtifactEdits(source, input.edits);
+      if (!applied.ok) {
+        return {
+          ok: false,
+          status: 400,
+          error: `${applied.error} in version ${current.number}'s ${format === 'markdown' ? 'Markdown' : 'HTML'}. Nothing was published.`,
+        };
+      }
+      const renamed = input.title !== undefined && input.title !== doc.title;
+      if (applied.text === source && !renamed) {
+        return { ok: false, status: 400, error: 'the edits leave the source unchanged. Nothing was published.' };
+      }
+
+      const outcome = publishWithin(tx, config, user, { kind: 'team', teamId }, {
+        title: input.title ?? doc.title,
+        documentId: doc.id,
+        ...(format === 'markdown' ? { markdown: applied.text } : { html: applied.text }),
+      });
+      if (!outcome.ok) return outcome;
+      const { documentId, versionNumber, url, orphaned, project } = outcome;
+      return { ok: true, documentId, versionNumber, url, orphaned, project, baseVersion: current.number, format };
+    });
+  } catch (error) {
+    if (error instanceof ProjectError) return { ok: false, status: error.status, error: error.message };
+    throw error;
+  }
+}
